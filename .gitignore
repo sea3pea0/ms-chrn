@@ -1,0 +1,10 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+credentials/
+credentials/oauth_client.json
+credentials/apps_script_token.json
+
+# Raw bank/provider transaction exports (financial data, re-exported as needed)
+transaction_csv_files/
