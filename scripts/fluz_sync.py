@@ -28,21 +28,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 import datetime as dt
 import hashlib
-import io
 import json
 import re
-import sys
 from collections import defaultdict
 from pathlib import Path
 
-import requests
-
-REPO = Path(__file__).resolve().parent.parent
-SA_KEY = REPO / "credentials" / "ms-chrn-18db117ee503.json"
-YNAB_BASE = "https://api.ynab.com/v1"
+from ynab_common import Ynab, cents, drive_csvs, fmt, load_env, local_csvs, milli, read_csv_text
 
 DRIVE_FOLDER_NAME = "Fluz Transaction CSVs"
 YNAB_ACCOUNT = "FLUZ"
@@ -72,28 +65,6 @@ REWARD_TYPES = {"Referral Royalties", "Rewards Bonus"}
 
 # ---------------------------------------------------------------- helpers
 
-def load_env() -> dict:
-    env = {}
-    for line in (REPO / ".env").read_text().splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip().strip('"').strip("'")
-    return env
-
-
-def milli(s) -> int:
-    v = str(s or "").replace("$", "").replace(",", "").strip()
-    try:
-        return int(round(float(v) * 1000))
-    except ValueError:
-        return 0
-
-
-def cents(m: int) -> int:
-    """Round milliunits to whole cents (YNAB shows cents)."""
-    return int(round(m / 10.0)) * 10
-
-
 def fluz_date(s: str):
     m = re.search(r"[A-Z][a-z]{2} ([A-Z][a-z]{2} \d{2} \d{4})", s or "")
     return dt.datetime.strptime(m.group(1), "%b %d %Y").date() if m else None
@@ -112,39 +83,7 @@ def import_id(txn_id: str, component: str) -> str:
     return "FZ:" + hashlib.md5(txn_id.encode()).hexdigest()[:12] + ":" + component
 
 
-def fmt(m: int) -> str:
-    return f"{m / 1000:,.2f}"
-
-
 # ---------------------------------------------------------------- inputs
-
-def read_csv_text(text: str) -> list[dict]:
-    return list(csv.DictReader(io.StringIO(text.lstrip("﻿"))))
-
-
-def drive_csvs() -> list[tuple[str, str]]:
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-
-    creds = service_account.Credentials.from_service_account_file(
-        str(SA_KEY), scopes=["https://www.googleapis.com/auth/drive.readonly"])
-    drive = build("drive", "v3", credentials=creds, cache_discovery=False)
-    folders = drive.files().list(
-        q=f"name = '{DRIVE_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-        fields="files(id)").execute()["files"]
-    if not folders:
-        sys.exit(f'Drive folder "{DRIVE_FOLDER_NAME}" not visible to the service account.')
-    files = drive.files().list(
-        q=f"'{folders[0]['id']}' in parents and trashed = false",
-        fields="files(id,name,mimeType,modifiedTime)", orderBy="modifiedTime").execute()["files"]
-    out = []
-    for f in files:
-        if not f["name"].lower().endswith(".csv") and f["mimeType"] != "text/csv":
-            continue
-        data = drive.files().get_media(fileId=f["id"]).execute()
-        out.append((f["name"], data.decode("utf-8-sig")))
-    return out
-
 
 def merged_rows(sources: list[tuple[str, str]]) -> list[dict]:
     """Merge rows across files by Transaction ID; later files win (fresher status)."""
@@ -155,37 +94,6 @@ def merged_rows(sources: list[tuple[str, str]]) -> list[dict]:
             if tid:
                 by_id[tid] = r
     return list(by_id.values())
-
-
-class Ynab:
-    def __init__(self, token: str, budget: str):
-        self.h = {"Authorization": f"Bearer {token}"}
-        self.b = f"{YNAB_BASE}/budgets/{budget}"
-
-    def get(self, path: str):
-        r = requests.get(self.b + path, headers=self.h, timeout=60)
-        r.raise_for_status()
-        return r.json()["data"]
-
-    def post_transactions(self, txns: list[dict]) -> dict:
-        # This budget rejects bulk creates with 403.4 data_limit_reached, so post one at a time.
-        created, dupes = [], []
-        for t in txns:
-            r = requests.post(self.b + "/transactions", headers=self.h, json={"transaction": t}, timeout=60)
-            if r.status_code == 409:
-                dupes.append(t["import_id"]); continue
-            if r.status_code >= 300:
-                raise RuntimeError(f"YNAB create failed {r.status_code} after {len(created)} created: {r.text}")
-            created.append(r.json()["data"]["transaction"]["id"])
-        return {"transaction_ids": created, "duplicate_import_ids": dupes}
-
-    def patch_transactions(self, txns: list[dict]) -> dict:
-        for t in txns:
-            tid = t.pop("id")
-            r = requests.put(f"{self.b}/transactions/{tid}", headers=self.h, json={"transaction": t}, timeout=60)
-            if r.status_code >= 300:
-                raise RuntimeError(f"YNAB update failed {r.status_code}: {r.text}")
-        return r.json()["data"]
 
 
 # ---------------------------------------------------------------- planning
@@ -358,7 +266,7 @@ def main():
     env = load_env()
     y = Ynab(env["YNAB_TOKEN"], env["YNAB_BUDGET_ID"])
 
-    sources = [(p, Path(p).read_text(encoding="utf-8-sig")) for p in args.csv] if args.csv else drive_csvs()
+    sources = local_csvs(args.csv) if args.csv else drive_csvs(DRIVE_FOLDER_NAME)
     if not sources:
         print("No CSVs found."); return
     rows = merged_rows(sources)
