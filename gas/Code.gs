@@ -111,20 +111,7 @@ function syncYnabMirror_(opts) {
       return;
     }
 
-    const token = getScriptProperty_('YNAB_TOKEN');
-    const budgetId = getScriptProperty_('YNAB_BUDGET_ID');
-    const props = PropertiesService.getDocumentProperties();
-    const lastKnowledge = Number(props.getProperty('YNAB_SERVER_KNOWLEDGE') || 0);
-
-    const accountMap = fetchYnabAccounts_(token, budgetId);
-    writeAccounts_(accountMap);
-
-    const txData = fetchYnabTransactions_(token, budgetId, opts.force ? 0 : lastKnowledge);
-    upsertMirrorTransactions_(txData.transactions || [], accountMap, opts.force || !lastKnowledge);
-
-    props.setProperty('YNAB_SERVER_KNOWLEDGE', String(txData.server_knowledge || 0));
-    props.setProperty('YNAB_LAST_SYNC_EPOCH_MS', String(Date.now()));
-    props.setProperty('YNAB_LAST_SYNC_CALLER', String(opts.calledBy || 'unknown'));
+    pullYnabMirror_(opts);
 
     // Transfer profit first, so the older full-mirror steps can't starve it of run time.
     importTaekusCsvs();
@@ -136,6 +123,24 @@ function syncYnabMirror_(opts) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Fetch accounts + changed transactions into the mirror (no lock, no cooldown). */
+function pullYnabMirror_(opts) {
+  const token = getScriptProperty_('YNAB_TOKEN');
+  const budgetId = getScriptProperty_('YNAB_BUDGET_ID');
+  const props = PropertiesService.getDocumentProperties();
+  const lastKnowledge = Number(props.getProperty('YNAB_SERVER_KNOWLEDGE') || 0);
+
+  const accountMap = fetchYnabAccounts_(token, budgetId);
+  writeAccounts_(accountMap);
+
+  const txData = fetchYnabTransactions_(token, budgetId, opts.force ? 0 : lastKnowledge);
+  upsertMirrorTransactions_(txData.transactions || [], accountMap, opts.force || !lastKnowledge);
+
+  props.setProperty('YNAB_SERVER_KNOWLEDGE', String(txData.server_knowledge || 0));
+  props.setProperty('YNAB_LAST_SYNC_EPOCH_MS', String(Date.now()));
+  props.setProperty('YNAB_LAST_SYNC_CALLER', String(opts.calledBy || 'unknown'));
 }
 
 function rebuildCashbackLedger() {
@@ -338,6 +343,23 @@ function upsertMirrorTransactions_(transactions, accountMap, replaceAll) {
     if (existingRow) updates.push({ row: existingRow, values: row });
     else appends.push(row);
   });
+
+  // Many changes (e.g. a bulk recategorize): rewrite the body once instead of row by row.
+  if (updates.length + deletes.length > 50) {
+    const w = CFG.mirrorHeaders.length;
+    const byRow = {};
+    updates.forEach((u) => { byRow[u.row] = u.values; });
+    const gone = new Set(deletes);
+    const rows = [];
+    for (let i = 1; i < values.length; i += 1) {
+      if (gone.has(i + 1)) continue;
+      rows.push(byRow[i + 1] || values[i].slice(0, w));
+    }
+    appends.forEach((r) => rows.push(r));
+    resetDataBody_(sh, w);
+    if (rows.length) sh.getRange(2, 1, rows.length, w).setValues(rows);
+    return;
+  }
 
   deletes.sort((a, b) => b - a).forEach((rowNum) => sh.deleteRow(rowNum));
 

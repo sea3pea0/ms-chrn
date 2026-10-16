@@ -15,7 +15,8 @@
  * points). Classification patterns live in Config under transfer_rules.
  *
  * One-time setup: run setupTransferProfit() from the editor. It creates the
- * sheets, imports, builds, and installs the hourly refresh trigger.
+ * sheets, installs the hourly refresh trigger, catches the YNAB mirror up,
+ * imports, and builds.
  */
 
 const XFER_CFG = {
@@ -61,11 +62,12 @@ const XFER_CFG = {
 
 function setupTransferProfit() {
   ensureTransferSheets_();
+  installTransferTrigger();
+  csvSyncLocked_('setupTransferProfit', () => pullYnabMirror_({ force: false, calledBy: 'setup' }));
   importTaekusCsvs();
   rebuildTransferLedger();
   applyViewFormulas_();
   applySummaryFormulas_();
-  installTransferTrigger();
 }
 
 /** Hourly YNAB mirror sync + Taekus import + ledger rebuild (replaces the daily trigger). */
