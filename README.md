@@ -149,3 +149,26 @@ cd /home/cmarty_pantz/ms-chrn
 . .venv/bin/activate
 python scripts/profile_ynab_export.py "transaction_csv_files/Selected Transactions for Christopher's Budget as of 2026-10-04 08-53.csv"
 ```
+
+## Transfer profit (MS, MS-Crypto, Bill Pay)
+
+`gas/TransferProfit.gs` tracks profit from Taekus debit transfers (Fluz and Blue Penguin to follow).
+
+1. `importTaekusCsvs()` reads every ALT debit export in Drive folder **Churning & MS > Taekus Transaction CSVs**
+   into `Taekus_Raw` (deduped; newest file wins). The account comes from the last 4 digits in the file name,
+   e.g. `...ALT Business Debit-0523.csv`, matched to the YNAB account `TKB - 0523 - P1`.
+2. `rebuildTransferLedger()` matches each YNAB outflow from a Taekus account (YNAB mirror sheet) to its Taekus
+   row by account, exact amount and date (-3..+5 days), classifies it, and writes `Transfer_Ledger` with
+   points and profit = points x `Config` taekus/point_value (default 0.01).
+   - `BILL_PAY`: transfer to a credit card account, or a bill-pay descriptor
+   - `MS_CRYPTO`: Coinbase, Uphold, PYUSD, etc., or a Taekus -> PayPal transfer followed by a PayPal crypto buy
+   - `MS`: any other account-to-account transfer or money transmitter
+   - `INTERNAL` (Taekus to Taekus), `OTHER` (purchases) and `REVIEW` (Taekus row with no YNAB transaction)
+     stay out of the views.
+3. `MS`, `MS-Crypto`, `Bill Pay` and `Summary` are formula views of `Transfer_Ledger`.
+
+Fixes: put a YNAB txn id in `Transfer_Overrides` with a bucket and/or points. Patterns are editable in `Config`
+under `transfer_rules`.
+
+Setup: run `setupTransferProfit()` once from the Apps Script editor. It installs an hourly
+`syncYnabMirrorScheduled` trigger (YNAB sync -> Taekus import -> ledger -> views).

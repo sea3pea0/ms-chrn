@@ -58,6 +58,7 @@ function setupWorkbook() {
   seedRatesSheet_();
   seedOverrideSheet_();
   seedRawHelperSheets_();
+  ensureTransferSheets_();
   applyViewFormulas_();
   applySummaryFormulas_();
 }
@@ -125,10 +126,13 @@ function syncYnabMirror_(opts) {
     props.setProperty('YNAB_LAST_SYNC_EPOCH_MS', String(Date.now()));
     props.setProperty('YNAB_LAST_SYNC_CALLER', String(opts.calledBy || 'unknown'));
 
-    buildCashBackRatesSheet();
-    rebuildCashbackLedger();
+    // Transfer profit first, so the older full-mirror steps can't starve it of run time.
+    importTaekusCsvs();
+    rebuildTransferLedger();
     applyViewFormulas_();
     applySummaryFormulas_();
+    buildCashBackRatesSheet();
+    rebuildCashbackLedger();
   } finally {
     lock.releaseLock();
   }
@@ -529,9 +533,10 @@ function writeAccounts_(accountMap) {
 }
 
 function applyViewFormulas_() {
-  setViewFormula_(CFG.sheets.ms, 'MS');
-  setViewFormula_(CFG.sheets.msCrypto, 'MS_CRYPTO');
-  setViewFormula_(CFG.sheets.billPay, 'BILL_PAY');
+  // MS / MS-Crypto / Bill Pay come from Transfer_Ledger (TransferProfit.gs).
+  setTransferView_(CFG.sheets.ms, 'MS');
+  setTransferView_(CFG.sheets.msCrypto, 'MS_CRYPTO');
+  setTransferView_(CFG.sheets.billPay, 'BILL_PAY');
   setViewFormula_(CFG.sheets.bankBonus, 'BANK_BONUS');
 }
 
@@ -553,19 +558,32 @@ function setViewFormula_(sheetName, bucket) {
 
 function applySummaryFormulas_() {
   const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheets.summary);
+  const L = XFER_CFG.sheets.ledger;
   sh.clear();
-  sh.getRange('A1').setValue('MS-CHRN Cashback Summary');
-  sh.getRange('A3:E3').setValues([['Bucket', 'Txn Count', 'Outflow', 'Inflow', 'Cashback']]);
+  sh.getRange('A1').setValue('MS-CHRN Transfer Profit Summary');
+  sh.getRange('A3:F3').setValues([['Bucket', 'Transfers', 'Amount', 'Points', 'Profit', 'Avg rate']]);
 
-  const buckets = ['MS', 'MS_CRYPTO', 'BILL_PAY', 'BANK_BONUS', 'OTHER'];
+  const buckets = ['MS', 'MS_CRYPTO', 'BILL_PAY'];
   buckets.forEach((b, i) => {
     const row = 4 + i;
     sh.getRange(row, 1).setValue(b);
-    sh.getRange(row, 2).setFormula(`=COUNTIF(${CFG.sheets.ledger}!J:J,A${row})`);
-    sh.getRange(row, 3).setFormula(`=SUMIFS(${CFG.sheets.ledger}!H:H,${CFG.sheets.ledger}!J:J,A${row})`);
-    sh.getRange(row, 4).setFormula(`=SUMIFS(${CFG.sheets.ledger}!I:I,${CFG.sheets.ledger}!J:J,A${row})`);
-    sh.getRange(row, 5).setFormula(`=SUMIFS(${CFG.sheets.ledger}!O:O,${CFG.sheets.ledger}!J:J,A${row})`);
+    sh.getRange(row, 2).setFormula(`=COUNTIF('${L}'!H:H,A${row})`);
+    sh.getRange(row, 3).setFormula(`=SUMIFS('${L}'!G:G,'${L}'!H:H,A${row})`);
+    sh.getRange(row, 4).setFormula(`=SUMIFS('${L}'!I:I,'${L}'!H:H,A${row})`);
+    sh.getRange(row, 5).setFormula(`=SUMIFS('${L}'!K:K,'${L}'!H:H,A${row})`);
+    sh.getRange(row, 6).setFormula(`=IFERROR(E${row}/C${row},0)`);
   });
+  sh.getRange('A7').setValue('Total');
+  sh.getRange('B7:E7').setFormulas([['=SUM(B4:B6)', '=SUM(C4:C6)', '=SUM(D4:D6)', '=SUM(E4:E6)']]);
+  sh.getRange('F7').setFormula('=IFERROR(E7/C7,0)');
+  sh.getRange('A8').setValue('Needs review');
+  sh.getRange('B8').setFormula(`=COUNTIF('${L}'!H:H,"REVIEW")+COUNTIF('${L}'!M:M,"no csv row*")`);
+  sh.getRange('C4:C7').setNumberFormat('$#,##0.00');
+  sh.getRange('D4:D7').setNumberFormat('#,##0');
+  sh.getRange('E4:E7').setNumberFormat('$#,##0.00');
+  sh.getRange('F4:F7').setNumberFormat('0.00%');
+  sh.getRange('A3:F3').setFontWeight('bold');
+  sh.getRange('A7:F7').setFontWeight('bold');
 
   sh.getRange('A11:C11').setValues([['Sync Info', 'Value', 'Notes']]);
   sh.getRange('A12').setValue('Last API Sync (epoch ms)');
