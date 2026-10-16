@@ -2,8 +2,8 @@
  * Per-target money in / money out / cash back (all time, yearly, monthly).
  *
  * rebuildTargetStats() writes Target_Stats from Transfer_Ledger and the YNAB mirror:
- *   money out = YNAB outflows from any account to the target (payee/category match,
- *               or a transfer into one of its accounts)
+ *   money out = YNAB outflows from any account to the target (category Transfer: X,
+ *               payee/category alias, or a transfer into one of its accounts)
  *   money in  = YNAB inflows into any account from the target, same matching
  *   cash back = profit on tracked transfers (Transfer_Ledger MS, MS_CRYPTO, BILL_PAY)
  * Moves inside the target itself (e.g. between two MoneyLion accounts) are ignored.
@@ -25,7 +25,7 @@ function rebuildTargetStats() {
   const ss = SpreadsheetApp.getActive();
   const rows = buildTargetStatsRows_({
     ledger: ss.getSheetByName(XFER_CFG.sheets.ledger).getDataRange().getValues(),
-    mirror: ss.getSheetByName(CFG.sheets.ynabMirror).getDataRange().getValues(),
+    mirror: combinedMirror_(),
     cfg: xferConfig_(),
     tz: ss.getSpreadsheetTimeZone()
   });
@@ -55,6 +55,7 @@ function rebuildTargetStats() {
 /** Pure function (no Apps Script services) so it can be tested offline. */
 function buildTargetStatsRows_(input) {
   const aliases = targetAliases_(input.cfg);
+  const transferGroup = String(input.cfg.transfer_rules.transfer_category_group || 'Transfer').toLowerCase();
   const stats = {};
   const add = (group, iso, field, v) => {
     [['all', 'all'], ['year', iso.slice(0, 4)], ['month', iso.slice(0, 7)]].forEach((p) => {
@@ -85,7 +86,13 @@ function buildTargetStatsRows_(input) {
     const outflow = toNumber_(r[mh.Outflow]);
     if (!(inflow > 0) && !(outflow > 0)) return;
     const payee = String(r[mh.Payee] || '');
-    let group = targetGroup_([payee, r[mh.Category]], aliases);
+    const category = String(r[mh.Category] || '');
+    let group = '';
+    if (String(r[mh['Category Group']] || '').toLowerCase() === transferGroup && category) {
+      group = targetGroup_([category], aliases) || category;
+      groups.add(group);
+    }
+    if (!group) group = targetGroup_([payee, category], aliases);
     if (!group) {
       const m = payee.match(/^Transfer : (.+)$/);
       if (m && groups.has(m[1].trim())) group = m[1].trim();

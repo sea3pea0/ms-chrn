@@ -32,7 +32,7 @@ const CFG = {
     'Account', 'Flag', 'Date', 'Payee', 'Category Group/Category', 'Category Group', 'Category', 'Memo',
     'Outflow', 'Inflow', 'Cleared',
     'txn_id', 'account_id', 'transfer_account_id', 'deleted', 'approved', 'flag_color_raw', 'import_id',
-    'last_modified_on', 'source'
+    'last_modified_on', 'source', 'split_fee'
   ],
   accountHeaders: ['account_id', 'account_name', 'account_type', 'on_budget', 'closed', 'note'],
   rateHeaders: ['active', 'bucket', 'match_field', 'match_type', 'match_value', 'standard_rate', 'cashback_source', 'notes'],
@@ -112,11 +112,14 @@ function syncYnabMirror_(opts) {
     }
 
     pullYnabMirror_(opts);
+    combinedMirrorCache_ = null;
+    importYnabHistory();
 
     // Transfer profit first, so the older full-mirror steps can't starve it of run time.
     importTaekusCsvs();
     rebuildTransferLedger();
-    rebuildTargetStats();
+    if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet)) rebuildTargetStats();
+    else setupTargetDashboard(); // first run after a setup that ran out of time
     applyViewFormulas_();
     applySummaryFormulas_();
     buildCashBackRatesSheet();
@@ -137,7 +140,8 @@ function pullYnabMirror_(opts) {
   writeAccounts_(accountMap);
 
   const txData = fetchYnabTransactions_(token, budgetId, opts.force ? 0 : lastKnowledge);
-  upsertMirrorTransactions_(txData.transactions || [], accountMap, opts.force || !lastKnowledge);
+  const catGroups = fetchYnabCategoryGroups_(token, budgetId);
+  upsertMirrorTransactions_(txData.transactions || [], accountMap, opts.force || !lastKnowledge, catGroups);
 
   props.setProperty('YNAB_SERVER_KNOWLEDGE', String(txData.server_knowledge || 0));
   props.setProperty('YNAB_LAST_SYNC_EPOCH_MS', String(Date.now()));
@@ -247,6 +251,16 @@ function rebuildCashbackLedger() {
   }
 }
 
+/** category_id -> category group name (transactions only carry the category name). */
+function fetchYnabCategoryGroups_(token, budgetId) {
+  const data = ynabGetWithBackoff_(`${CFG.ynabBaseUrl}/budgets/${budgetId}/categories`, token);
+  const map = {};
+  (data.category_groups || []).forEach((g) => {
+    (g.categories || []).forEach((c) => { map[c.id] = g.name; });
+  });
+  return map;
+}
+
 function fetchYnabAccounts_(token, budgetId) {
   const url = `${CFG.ynabBaseUrl}/budgets/${budgetId}/accounts`;
   const data = ynabGetWithBackoff_(url, token);
@@ -304,13 +318,13 @@ function ynabGetWithBackoff_(url, token) {
   throw new Error('YNAB API request failed after retries.');
 }
 
-function upsertMirrorTransactions_(transactions, accountMap, replaceAll) {
+function upsertMirrorTransactions_(transactions, accountMap, replaceAll, catGroups) {
   const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheets.ynabMirror);
 
   if (replaceAll) {
     const rows = transactions
       .filter((t) => !t.deleted)
-      .map((t) => mapTxnToMirrorRow_(t, accountMap));
+      .map((t) => mapTxnToMirrorRow_(t, accountMap, catGroups));
     resetDataBody_(sh, CFG.mirrorHeaders.length);
     if (rows.length) {
       sh.getRange(2, 1, rows.length, CFG.mirrorHeaders.length).setValues(rows);
@@ -340,7 +354,7 @@ function upsertMirrorTransactions_(transactions, accountMap, replaceAll) {
       return;
     }
 
-    const row = mapTxnToMirrorRow_(t, accountMap);
+    const row = mapTxnToMirrorRow_(t, accountMap, catGroups);
     if (existingRow) updates.push({ row: existingRow, values: row });
     else appends.push(row);
   });
@@ -373,15 +387,32 @@ function upsertMirrorTransactions_(transactions, accountMap, replaceAll) {
   }
 }
 
-function mapTxnToMirrorRow_(t, accountMap) {
+function mapTxnToMirrorRow_(t, accountMap, catGroups) {
   const src = accountMap[t.account_id] || {};
-  const dst = accountMap[t.transfer_account_id] || {};
+  // Split: fee lines are summed into split_fee; the largest line's category and transfer
+  // stand for the parent (YNAB itself only says "Split").
+  const groups = catGroups || {};
+  const subs = (t.subtransactions || []).filter((s) => !s.deleted);
+  let splitFee = 0;
+  let transferId = t.transfer_account_id || '';
+  let catId = t.category_id;
+  let cName = t.category_name || '';
+  if (subs.length) {
+    subs.forEach((s) => {
+      const text = [s.category_name, groups[s.category_id], s.payee_name].join(' ');
+      if (/\bfees?\b/i.test(text) && s.amount < 0) splitFee += Math.abs(s.amount) / 1000;
+    });
+    const big = subs.slice().sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
+    if (!transferId) transferId = big.transfer_account_id || '';
+    catId = big.category_id;
+    cName = big.category_name || '';
+  }
+  const dst = accountMap[transferId] || {};
   const amount = Number(t.amount || 0) / 1000;
   const outflow = amount < 0 ? Math.abs(amount) : 0;
   const inflow = amount > 0 ? amount : 0;
 
-  const cGroup = t.category_group_name || '';
-  const cName = t.category_name || '';
+  const cGroup = (subs.length ? '' : t.category_group_name) || groups[catId] || '';
   const cgc = cGroup && cName ? `${cGroup}: ${cName}` : cName;
   const payee = t.payee_name || (dst.name ? `Transfer : ${dst.name}` : '');
 
@@ -399,13 +430,14 @@ function mapTxnToMirrorRow_(t, accountMap) {
     normalizeCleared_(t.cleared || ''),
     t.id || '',
     t.account_id || '',
-    t.transfer_account_id || '',
+    transferId,
     Boolean(t.deleted),
     Boolean(t.approved),
     t.flag_color || '',
     t.import_id || '',
     t.date || '',
-    'ynab_api'
+    'ynab_api',
+    Math.round(splitFee * 100) / 100
   ];
 }
 

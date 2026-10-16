@@ -33,7 +33,7 @@ const XFER_CFG = {
   ledgerHeaders: [
     'date', 'source', 'account', 'payee', 'target', 'target_type', 'amount', 'bucket',
     'points', 'point_value', 'profit', 'rate', 'match', 'csv_description', 'csv_date',
-    'ynab_txn_id', 'memo', 'note', 'month', 'target_group'
+    'ynab_txn_id', 'memo', 'note', 'month', 'target_group', 'fee'
   ],
   overrideHeaders: ['ynab_txn_id', 'bucket', 'points', 'notes'],
   buckets: ['MS', 'MS_CRYPTO', 'BILL_PAY'],
@@ -41,8 +41,8 @@ const XFER_CFG = {
   configDefaults: {
     taekus: {
       point_value: '0.01',
-      match_days_before: '3',
-      match_days_after: '5'
+      match_days_before: '7',
+      match_days_after: '10'
     },
     transfer_rules: {
       crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin',
@@ -50,6 +50,7 @@ const XFER_CFG = {
       ms_regex: 'lemfi|wise|revolut|sling|morse|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom',
       paypal_account_regex: '^PP',
       internal_account_regex: '^TK[BP]\\b',
+      transfer_category_group: 'Transfer',
       paypal_pair_days: '3',
       paypal_pair_tolerance: '0.05'
     },
@@ -64,7 +65,7 @@ const XFER_CFG = {
       LemFi: 'lemfi',
       MoneyLion: 'moneylion|money lion|roarmoney|ml spend|^MOLI\\b|transfer : MOLI\\b',
       Skrill: 'skrill|^SKRL\\b|transfer : SKRL\\b',
-      Wise: '\\bwise\\b',
+      Wise: '\\bwise\\b|^WSE[BP]\\b|transfer : WSE[BP]\\b',
       Revolut: 'revolut',
       Sling: 'sling|morse',
       'Western Union': 'western union|^wu\\b',
@@ -85,7 +86,9 @@ const XFER_CFG = {
 function setupTransferProfit() {
   ensureTransferSheets_();
   installTransferTrigger();
-  csvSyncLocked_('setupTransferProfit', () => pullYnabMirror_({ force: false, calledBy: 'setup' }));
+  // Full refresh so every mirror row has category groups and split fees.
+  csvSyncLocked_('setupTransferProfit', () => pullYnabMirror_({ force: true, calledBy: 'setup' }));
+  importYnabHistory(true);
   importTaekusCsvs();
   rebuildTransferLedger();
   applyViewFormulas_();
@@ -208,7 +211,7 @@ function rebuildTransferLedger() {
   ensureTransferSheets_();
   const ss = SpreadsheetApp.getActive();
   const rows = buildTransferLedgerRows_({
-    mirror: ss.getSheetByName(CFG.sheets.ynabMirror).getDataRange().getValues(),
+    mirror: combinedMirror_(),
     accounts: ss.getSheetByName(CFG.sheets.ynabAccounts).getDataRange().getValues(),
     taekus: ss.getSheetByName(XFER_CFG.sheets.taekusRaw).getDataRange().getValues(),
     overrides: ss.getSheetByName(XFER_CFG.sheets.overrides).getDataRange().getValues(),
@@ -228,6 +231,7 @@ function rebuildTransferLedger() {
     sh.getRange(2, 9, rows.length, 1).setNumberFormat('#,##0');
     sh.getRange(2, 11, rows.length, 1).setNumberFormat('$#,##0.00');
     sh.getRange(2, 12, rows.length, 1).setNumberFormat('0.00%');
+    sh.getRange(2, 21, rows.length, 1).setNumberFormat('$#,##0.00');
   }
   console.log('Transfer_Ledger: ' + rows.length + ' rows');
   return rows.length;
@@ -237,8 +241,8 @@ function rebuildTransferLedger() {
 function buildTransferLedgerRows_(input) {
   const cfg = input.cfg;
   const pointValue = Number(cfg.taekus.point_value) || 0.01;
-  const before = Number(cfg.taekus.match_days_before) || 3;
-  const after = Number(cfg.taekus.match_days_after) || 5;
+  const before = Number(cfg.taekus.match_days_before) || 7;
+  const after = Number(cfg.taekus.match_days_after) || 10;
   const rx = (k) => new RegExp(cfg.transfer_rules[k], 'i');
   const cryptoRx = rx('crypto_regex');
   const billRx = rx('bill_pay_regex');
@@ -248,6 +252,7 @@ function buildTransferLedgerRows_(input) {
   const pairDays = Number(cfg.transfer_rules.paypal_pair_days) || 3;
   const pairTol = Number(cfg.transfer_rules.paypal_pair_tolerance) || 0.05;
   const aliases = targetAliases_(cfg);
+  const transferGroup = String(cfg.transfer_rules.transfer_category_group || 'Transfer').toLowerCase();
 
   // Accounts: id -> {name, type}; Taekus accounts by last 4.
   const accounts = {};
@@ -281,8 +286,10 @@ function buildTransferLedgerRows_(input) {
       account: String(r[mh.Account] || ''),
       payee: String(r[mh.Payee] || ''),
       category: String(r[mh.Category] || ''),
+      catGroup: String(r[mh['Category Group']] || ''),
       memo: String(r[mh.Memo] || ''),
       outflow: toNumber_(r[mh.Outflow]),
+      fee: mh.split_fee === undefined ? 0 : toNumber_(r[mh.split_fee]),
       dstId: String(r[mh.transfer_account_id] || '').trim()
     });
   });
@@ -361,11 +368,12 @@ function buildTransferLedgerRows_(input) {
 
   const out = [];
   const emit = (o) => {
-    const profit = Math.round(o.points * pointValue * 100) / 100;
+    const fee = o.fee || 0;
+    const profit = Math.round((o.points * pointValue - fee) * 100) / 100;
     out.push([
       isoToDate_(o.iso), 'TAEKUS', o.account, o.payee, o.target, o.targetType, o.amount, o.bucket,
       o.points, pointValue, profit, o.amount ? profit / o.amount : 0, o.match, o.csvDesc, o.csvIso,
-      o.id, o.memo, o.note, o.iso.slice(0, 7), o.group
+      o.id, o.memo, o.note, o.iso.slice(0, 7), o.group, fee
     ]);
   };
 
@@ -385,6 +393,8 @@ function buildTransferLedgerRows_(input) {
     let bucket = 'OTHER';
     let note = '';
     let pairedPayee = '';
+    // YNAB category group "Transfer" (e.g. Transfer: Coinbase) names the target directly.
+    const transferCat = t.catGroup.toLowerCase() === transferGroup && t.category ? t.category : '';
     if (dst && internalRx.test(dst.name)) bucket = 'INTERNAL';
     else if (dst && CFG.debtTypes.has(dst.type)) bucket = 'BILL_PAY';
     else if (cryptoRx.test(text)) bucket = 'MS_CRYPTO';
@@ -403,7 +413,7 @@ function buildTransferLedgerRows_(input) {
         break;
       }
     } else if (billRx.test(text)) bucket = 'BILL_PAY';
-    else if (dst || msRx.test(text)) bucket = 'MS';
+    else if (transferCat || dst || msRx.test(text)) bucket = 'MS';
 
     let points = c ? c.points : 0;
     const ov = overrides[t.id];
@@ -417,8 +427,10 @@ function buildTransferLedgerRows_(input) {
     emit({
       iso: t.iso, account: t.account, payee: t.payee, target: dst ? dst.name : t.payee,
       targetType: dst ? dst.type : '', amount: t.outflow, bucket: bucket, points: points, match: match,
-      csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note,
-      group: targetGroup_([pairedPayee, dst ? dst.name : '', t.payee, c ? c.desc : ''], aliases) || (dst ? dst.name : t.payee)
+      csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: t.fee,
+      group: (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
+        (transferCat && (targetGroup_([transferCat], aliases) || transferCat)) ||
+        targetGroup_([dst ? dst.name : '', t.payee, c ? c.desc : ''], aliases) || (dst ? dst.name : t.payee)
     });
   });
 
@@ -481,39 +493,40 @@ function setTransferView_(sheetName, bucket) {
   const sheet = ensureSheet_(SpreadsheetApp.getActive(), sheetName);
   const L = XFER_CFG.sheets.ledger;
   sheet.clear();
-  sheet.getRange('A1:F1').setValues([['Transfers', 'Amount', 'Points', 'Profit', 'Avg rate', 'Last 30 days profit']]);
-  sheet.getRange('A2:F2').setFormulas([[
+  sheet.getRange('A1:G1').setValues([['Transfers', 'Amount', 'Points', 'Fees', 'Profit (net)', 'Avg rate', 'Last 30 days profit']]);
+  sheet.getRange('A2:G2').setFormulas([[
     `=COUNTIF('${L}'!H:H,"${bucket}")`,
     `=SUMIFS('${L}'!G:G,'${L}'!H:H,"${bucket}")`,
     `=SUMIFS('${L}'!I:I,'${L}'!H:H,"${bucket}")`,
+    `=SUMIFS('${L}'!U:U,'${L}'!H:H,"${bucket}")`,
     `=SUMIFS('${L}'!K:K,'${L}'!H:H,"${bucket}")`,
-    '=IFERROR(D2/B2,0)',
+    '=IFERROR(E2/B2,0)',
     `=SUMIFS('${L}'!K:K,'${L}'!H:H,"${bucket}",'${L}'!A:A,">="&(TODAY()-30))`
   ]]);
-  sheet.getRange('A1:F1').setFontWeight('bold');
+  sheet.getRange('A1:G1').setFontWeight('bold');
   sheet.getRange('B2').setNumberFormat('$#,##0.00');
   sheet.getRange('C2').setNumberFormat('#,##0');
-  sheet.getRange('D2').setNumberFormat('$#,##0.00');
-  sheet.getRange('E2').setNumberFormat('0.00%');
-  sheet.getRange('F2').setNumberFormat('$#,##0.00');
+  sheet.getRange('D2:E2').setNumberFormat('$#,##0.00');
+  sheet.getRange('F2').setNumberFormat('0.00%');
+  sheet.getRange('G2').setNumberFormat('$#,##0.00');
 
-  // Transactions: A4:L
+  // Transactions: A4:M
   sheet.getRange('A4').setFormula(
-    `=IFERROR(QUERY('${L}'!A1:T,"select A,C,D,E,G,I,K,L,M,R,Q,P where H = '${bucket}' order by A desc ` +
-    `label A 'date', C 'account', D 'payee', E 'target', G 'amount', I 'points', K 'profit', L 'rate', ` +
+    `=IFERROR(QUERY('${L}'!A1:U,"select A,C,D,T,G,I,U,K,L,M,R,Q,P where H = '${bucket}' order by A desc ` +
+    `label A 'date', C 'account', D 'payee', T 'target', G 'amount', I 'points', U 'fee', K 'profit', L 'rate', ` +
     `M 'match', R 'note', Q 'memo', P 'ynab_txn_id'",1),"")`);
-  // Monthly: N4:R
-  sheet.getRange('N4').setFormula(
-    `=IFERROR(QUERY('${L}'!A1:T,"select S, count(G), sum(G), sum(I), sum(K) where H = '${bucket}' group by S order by S desc ` +
-    `label S 'month', count(G) 'transfers', sum(G) 'amount', sum(I) 'points', sum(K) 'profit'",1),"")`);
+  // Monthly: O4:T
+  sheet.getRange('O4').setFormula(
+    `=IFERROR(QUERY('${L}'!A1:U,"select S, count(G), sum(G), sum(I), sum(U), sum(K) where H = '${bucket}' group by S order by S desc ` +
+    `label S 'month', count(G) 'transfers', sum(G) 'amount', sum(I) 'points', sum(U) 'fees', sum(K) 'profit'",1),"")`);
   sheet.getRange('A5:A').setNumberFormat('yyyy-mm-dd');
   sheet.getRange('E5:E').setNumberFormat('$#,##0.00');
   sheet.getRange('F5:F').setNumberFormat('#,##0');
-  sheet.getRange('G5:G').setNumberFormat('$#,##0.00');
-  sheet.getRange('H5:H').setNumberFormat('0.00%');
-  sheet.getRange('P5:P').setNumberFormat('$#,##0.00');
-  sheet.getRange('Q5:Q').setNumberFormat('#,##0');
-  sheet.getRange('R5:R').setNumberFormat('$#,##0.00');
-  sheet.getRange('A4:R4').setFontWeight('bold');
+  sheet.getRange('G5:H').setNumberFormat('$#,##0.00');
+  sheet.getRange('I5:I').setNumberFormat('0.00%');
+  sheet.getRange('Q5:Q').setNumberFormat('$#,##0.00');
+  sheet.getRange('R5:R').setNumberFormat('#,##0');
+  sheet.getRange('S5:T').setNumberFormat('$#,##0.00');
+  sheet.getRange('A4:T4').setFontWeight('bold');
   sheet.setFrozenRows(4);
 }

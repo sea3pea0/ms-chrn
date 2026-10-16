@@ -180,3 +180,13 @@ time / per year / per month) and builds the `Targets` sheet: pick a target in B1
 charts; the bottom section compares all targets. Money in/out come from every YNAB account (payee, category or
 transfer into the target accounts); cash back comes from `Transfer_Ledger`. Targets are grouped by `Config`
 `target_aliases` (first matching alias wins; unmatched targets such as credit cards keep their own name).
+
+### Full history and fees
+
+The YNAB API only returns about 12 months, so `gas/YnabHistory.gs` loads the newest export in Drive folder
+**Churning & MS > YNAB Transaction CSVs** into `YNAB_History` (re-imported only when a newer file appears).
+The ledger and target stats use the API mirror plus the history rows dated before it. Split transactions are
+merged back into one row, and their fee lines (category/payee containing "fee", e.g. Wise Debit Load Fee) go
+into `split_fee`; profit in `Transfer_Ledger` is points x point value minus that fee. The API mirror gets the
+same treatment from subtransactions, plus category groups from `/categories`. A YNAB category in the
+`Transfer` group (e.g. Transfer: Coinbase) names the transfer target directly.
