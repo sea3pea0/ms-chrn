@@ -94,6 +94,26 @@ function setupTransferProfit() {
   applyViewFormulas_();
   applySummaryFormulas_();
   setupTargetDashboard();
+  arrangeSheets_();
+}
+
+/** Views first, then data sheets; anything else (unknown) stays at the end. */
+function arrangeSheets_() {
+  const ss = SpreadsheetApp.getActive();
+  const order = [
+    CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet,
+    XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw,
+    CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
+  ];
+  let pos = 1;
+  order.forEach((name) => {
+    const sh = ss.getSheetByName(name);
+    if (!sh) return;
+    ss.setActiveSheet(sh);
+    ss.moveActiveSheet(pos);
+    pos += 1;
+  });
+  ss.setActiveSheet(ss.getSheetByName(CFG.sheets.summary));
 }
 
 /** Hourly YNAB mirror sync + Taekus import + ledger rebuild (replaces the daily trigger). */
