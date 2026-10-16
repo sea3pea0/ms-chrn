@@ -203,17 +203,25 @@ function taekusRowsFromCsvs_(files) {
       const iso = altIso_(r.date);
       if (!iso) return;
       const amount = toNumber_(r['transaction amount']);
-      let key = r['transaction uuid'];
-      if (!key) {
-        const base = [last4, r.date, r['transaction amount'], r.description].join('|');
-        seen[base] = (seen[base] || 0) + 1;
-        key = base + '|' + seen[base];
-      }
-      byKey[key] = [
+      // Overlapping exports format the same transaction differently (description case, uuid
+      // and points sometimes missing), so the key is account + timestamp + amount only; the
+      // Nth identical row in one file pairs with the Nth in another.
+      const base = [last4, String(r.date).trim(), Math.round(amount * 100)].join('|');
+      seen[base] = (seen[base] || 0) + 1;
+      const key = base + '|' + seen[base];
+      const row = [
         key, last4, iso, r.date, r['posted date'] || '', r.description || '', r.merchant || '', r['mcc code'] || '',
         amount, toNumber_(r['points credited']), r['transaction uuid'] || '', r['transaction MID'] || '',
         r.refund || '', r.settled || '', r['card nickname'] || '', f.name
       ];
+      const old = byKey[key];
+      if (old) {
+        // Keep the fuller copy: most points, and any field the newer file leaves blank.
+        row[9] = Math.max(row[9], old[9]);
+        [4, 6, 7, 10, 11, 14].forEach((i) => { if (!row[i]) row[i] = old[i]; });
+        if (old[10] && !r['transaction uuid']) row[5] = old[5];
+      }
+      byKey[key] = row;
     });
   });
   return Object.values(byKey).sort((a, b) => (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0));
