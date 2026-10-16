@@ -116,6 +116,7 @@ function syncYnabMirror_(opts) {
     // Transfer profit first, so the older full-mirror steps can't starve it of run time.
     importTaekusCsvs();
     rebuildTransferLedger();
+    rebuildTargetStats();
     applyViewFormulas_();
     applySummaryFormulas_();
     buildCashBackRatesSheet();

@@ -172,3 +172,11 @@ under `transfer_rules`.
 
 Setup: run `setupTransferProfit()` once from the Apps Script editor. It installs an hourly
 `syncYnabMirrorScheduled` trigger (YNAB sync -> Taekus import -> ledger -> views).
+
+### Targets dashboard
+
+`gas/TargetCharts.gs` writes `Target_Stats` (money in, money out, cash back and transfer count per target, all
+time / per year / per month) and builds the `Targets` sheet: pick a target in B1 for its yearly and monthly
+charts; the bottom section compares all targets. Money in/out come from every YNAB account (payee, category or
+transfer into the target accounts); cash back comes from `Transfer_Ledger`. Targets are grouped by `Config`
+`target_aliases` (first matching alias wins; unmatched targets such as credit cards keep their own name).
