@@ -30,12 +30,42 @@ const XFER_CFG = {
     taekusRaw: 'Taekus_Raw',
     fluzRaw: 'Fluz_Raw',
     blupeRaw: 'BLUPE_Raw',
+    blupeStatements: 'BLUPE_Statements',
     ledger: 'Transfer_Ledger',
     overrides: 'Transfer_Overrides'
   },
   taekusRawHeaders: [
     'key', 'account_last4', 'date', 'datetime', 'posted_date', 'description', 'merchant', 'mcc',
     'amount', 'points', 'uuid', 'mid', 'refund', 'settled', 'card_nickname', 'file'
+  ],
+  // Blue Penguin rebate statements (processing month = activity month; paid ~2 months later).
+  // Used for months the settlement CSVs don't cover (account 126795, Sep 2024 - Jan 2025).
+  // Every statement works out to ~69.7% of net interchange, hence interchange_share 0.697.
+  blupeStatementHeaders: ['processing_month', 'customer_id', 'settlement', 'interchange', 'rebate', 'payout'],
+  blupeStatementSeed: [
+    ['2024-09', '126795', 433592.57, 12707.80, 8865.46, '2024-11-15'],
+    ['2024-10', '126795', 273984.53, 8053.14, 5617.25, '2024-12-15'],
+    ['2024-11', '126795', 162846.59, 4673.60, 3258.00, '2025-01-15'],
+    ['2024-12', '126795', 81729.84, 2291.33, 1596.53, '2025-02-15'],
+    ['2025-01', '126795', 53111.77, 1525.17, 1061.85, '2025-03-15'],
+    ['2025-02', '128329', 101849.84, 2744.25, 1913.19, '2025-04-15'],
+    ['2025-03', '128329', 176822.58, 4764.53, 3322.60, '2025-05-15'],
+    ['2025-04', '128329', 109165.81, 2931.71, 2044.06, '2025-06-15'],
+    ['2025-05', '128329', 91059.04, 2496.24, 1741.20, '2025-07-15'],
+    ['2025-06', '128329', 113375.44, 3130.77, 2004.01, '2025-08-15'],
+    ['2025-07', '128329', 27390.91, 750.50, 522.97, '2025-09-15'],
+    ['2025-08', '128329', 36381.37, 1009.86, 703.81, '2025-10-15'],
+    ['2025-09', '128329', 30764.84, 859.86, 599.45, '2025-11-15'],
+    ['2025-10', '128329', 38127.85, 1060.56, 739.35, '2025-12-15'],
+    ['2025-11', '128329', 29736.39, 814.89, 567.84, '2026-01-15'],
+    ['2025-12', '128329', 5687.03, 152.82, 106.19, '2026-02-15'],
+    ['2026-01', '128329', 13048.65, 369.87, 257.72, '2026-03-15'],
+    ['2026-02', '128329', 9310.90, 260.76, 181.68, '2026-04-15'],
+    ['2026-03', '128329', 10704.77, 307.17, 214.16, '2026-05-15'],
+    ['2026-04', '128329', 13297.93, 385.16, 268.54, '2026-06-15'],
+    ['2026-05', '128329', 6882.41, 191.21, 133.28, '2026-07-15'],
+    ['2026-06', '128329', 5536.25, 147.01, 102.42, '2026-08-15'],
+    ['2026-08', '128329', 2872.47, 76.22, 53.14, '2026-10-15']
   ],
   blupeRawHeaders: [
     'event_id', 'type', 'date', 'amount', 'interchange', 'effective_rate', 'description', 'category',
@@ -69,7 +99,7 @@ const XFER_CFG = {
     },
     blupe: {
       account_name: 'BLUPE',
-      interchange_share: '0.6841',
+      interchange_share: '0.697',
       rebate_payee_regex: 'blue penguin',
       other_account_rebate_payee_regex: '^BP (REBATE|PAYOUT)\\b'
     },
@@ -141,7 +171,7 @@ function arrangeSheets_() {
   const order = [
     CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet,
     XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw,
-    XFER_CFG.sheets.blupeRaw,
+    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements,
     CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
   ];
   let pos = 1;
@@ -166,7 +196,8 @@ function installTransferTrigger() {
 
 function ensureTransferSheets_() {
   const ss = SpreadsheetApp.getActive();
-  [XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw, XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.ledger,
+  [XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw, XFER_CFG.sheets.blupeRaw,
+    XFER_CFG.sheets.blupeStatements, XFER_CFG.sheets.ledger,
     XFER_CFG.sheets.overrides]
     .forEach((n) => ensureSheet_(ss, n));
   Object.values(XFER_CFG.views).forEach((n) => ensureSheet_(ss, n));
@@ -174,6 +205,14 @@ function ensureTransferSheets_() {
   if (ov.getLastRow() === 0) {
     ov.getRange(1, 1, 1, XFER_CFG.overrideHeaders.length).setValues([XFER_CFG.overrideHeaders]);
     ov.setFrozenRows(1);
+  }
+  const st = ss.getSheetByName(XFER_CFG.sheets.blupeStatements);
+  if (st.getLastRow() === 0) {
+    const h = XFER_CFG.blupeStatementHeaders;
+    st.getRange(1, 1, 1, h.length).setValues([h]);
+    st.getRange(2, 1, XFER_CFG.blupeStatementSeed.length, 1).setNumberFormat('@');
+    st.getRange(2, 1, XFER_CFG.blupeStatementSeed.length, h.length).setValues(XFER_CFG.blupeStatementSeed);
+    st.setFrozenRows(1);
   }
   ensureConfigDefaults_();
 }
@@ -384,6 +423,7 @@ function rebuildTransferLedger() {
     taekus: ss.getSheetByName(XFER_CFG.sheets.taekusRaw).getDataRange().getValues(),
     fluz: ss.getSheetByName(XFER_CFG.sheets.fluzRaw).getDataRange().getValues(),
     blupe: ss.getSheetByName(XFER_CFG.sheets.blupeRaw).getDataRange().getValues(),
+    blupeStatements: ss.getSheetByName(XFER_CFG.sheets.blupeStatements).getDataRange().getValues(),
     overrides: ss.getSheetByName(XFER_CFG.sheets.overrides).getDataRange().getValues(),
     cfg: xferConfig_(),
     tz: ss.getSpreadsheetTimeZone()
@@ -554,6 +594,17 @@ function buildTransferLedgerRows_(input) {
       });
     });
   }
+
+  // Statement rate per processing month, and which months the settlement CSVs cover.
+  const bpStatements = {};
+  const sth = mapHeaderIndexes_((input.blupeStatements || [])[0] || []);
+  (input.blupeStatements || []).slice(1).forEach((r) => {
+    const m = String(r[sth.processing_month] || '').trim().slice(0, 7);
+    const settle = toNumber_(r[sth.settlement]);
+    if (/^\d{4}-\d{2}$/.test(m) && settle > 0) bpStatements[m] = { rate: toNumber_(r[sth.rebate]) / settle };
+  });
+  const bpCsvMonths = {};
+  csv.forEach((c) => { if (c.source === 'BLUPE') bpCsvMonths[c.iso.slice(0, 7)] = true; });
 
   // YNAB outflows from the source accounts.
   const tk = txns.filter((t) => last4ById[t.accountId] && t.outflow > 0);
@@ -738,6 +789,14 @@ function buildTransferLedgerRows_(input) {
     else if (transferCat || dst || msRx.test(text)) bucket = 'MS';
 
     let points = c ? c.points : 0;
+    // Blue Penguin months without settlement rows (account 126795, before the CSVs start): use that
+    // month's statement rate (rebate / settlement) so the history still shows cash back.
+    let cashback = c ? c.cashback : 0;
+    const stmt = !c && last4 === 'BLUPE' ? bpStatements[t.iso.slice(0, 7)] : null;
+    if (stmt && (!bpCsvMonths[t.iso.slice(0, 7)] || t.iso < csvMin.BLUPE) && bucket !== 'INTERNAL') {
+      cashback = Math.round(t.outflow * stmt.rate * 100) / 100;
+      match = 'statement rate';
+    }
     // A Fluz fee row is all cost: the whole charge counts as fee.
     const rowFee = bucket === 'FLUZ_FEE' ? t.outflow : t.fee;
     if (bucket === 'FLUZ_FEE') match = 'fee charge';
@@ -751,7 +810,7 @@ function buildTransferLedgerRows_(input) {
 
     emit({
       iso: t.iso, source: last4 === 'FLUZ' || last4 === 'BLUPE' ? last4 : 'TAEKUS', account: t.account, payee: t.payee,
-      target: dst ? dst.name : t.payee, cashback: c ? c.cashback : 0,
+      target: dst ? dst.name : t.payee, cashback: cashback,
       targetType: dst ? dst.type : '', amount: t.outflow, bucket: bucket, points: points, match: match,
       csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: rowFee,
       group: (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
