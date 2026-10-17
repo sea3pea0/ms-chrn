@@ -14,6 +14,7 @@ Google Sheet **MS-CHRN** (Drive: Churning & MS) driven by the Apps Script files 
 | Transfer_Overrides | Manual fixes by YNAB txn id: bucket and/or points |
 | Target_Stats | Per-target totals behind the Targets sheet (script-written) |
 | Taekus_Raw | Taekus ALT debit CSV rows from Drive (script-written) |
+| Fluz_Raw | Fluz purchases and withdrawals from the Fluz Drive exports (script-written) |
 | YNAB | YNAB API mirror, about the last 12 months (script-written) |
 | YNAB_History | Full YNAB CSV export, used for anything older than the mirror (script-written) |
 | YNAB_Accounts | YNAB accounts and types (script-written) |

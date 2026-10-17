@@ -5,10 +5,13 @@
  *    "Taekus Transaction CSVs" into Taekus_Raw (deduped; newest file wins, so a
  *    later export updates points that were still 0). The account comes from the
  *    last 4 digits in the file name, e.g. "...ALT Business Debit-0523.csv".
+ *    importFluzCsvs() does the same for the Fluz exports in "Fluz Transaction CSVs"
+ *    (merged by Transaction ID) into Fluz_Raw.
  * 2) rebuildTransferLedger() matches each YNAB outflow from a Taekus account
- *    (TKB/TKP - NNNN) in the YNAB mirror to its Taekus row by account, exact
- *    amount and date window, classifies it MS / MS_CRYPTO / BILL_PAY, and writes
- *    Transfer_Ledger with points and profit (points x Config taekus/point_value).
+ *    (TKB/TKP - NNNN) or FLUZ in the YNAB mirror to its Taekus / Fluz row (Fluz: by the
+ *    reference ID in the memo first), by account, exact amount and date window,
+ *    classifies it MS / MS_CRYPTO / BILL_PAY, and writes Transfer_Ledger with profit =
+ *    Taekus points x Config taekus/point_value + Fluz cashback - fees.
  * 3) The MS, MS-Crypto and Bill Pay sheets are QUERY views of Transfer_Ledger.
  *
  * Per-transaction fixes go in Transfer_Overrides (YNAB txn_id -> bucket and/or
@@ -21,8 +24,10 @@
 
 const XFER_CFG = {
   taekusFolder: 'Taekus Transaction CSVs',
+  fluzFolder: 'Fluz Transaction CSVs',
   sheets: {
     taekusRaw: 'Taekus_Raw',
+    fluzRaw: 'Fluz_Raw',
     ledger: 'Transfer_Ledger',
     overrides: 'Transfer_Overrides'
   },
@@ -30,10 +35,17 @@ const XFER_CFG = {
     'key', 'account_last4', 'date', 'datetime', 'posted_date', 'description', 'merchant', 'mcc',
     'amount', 'points', 'uuid', 'mid', 'refund', 'settled', 'card_nickname', 'file'
   ],
+  fluzRawHeaders: [
+    'transaction_id', 'reference_id', 'type', 'status', 'date', 'created_at', 'amount', 'destination',
+    'source', 'cashback', 'cashback_rate', 'fee', 'description', 'card_name', 'category', 'file'
+  ],
+  // Fluz rows that are money leaving Fluz (purchases earn cashback; withdrawals go to your own bank).
+  fluzTypes: ['Virtual Card Purchase', 'Gift Card Purchase', 'Withdrawal'],
+  fluzSkipStatus: /fail|cancel|declin|revers|refund/i,
   ledgerHeaders: [
     'date', 'source', 'account', 'payee', 'target', 'target_type', 'amount', 'bucket',
     'points', 'point_value', 'profit', 'rate', 'match', 'csv_description', 'csv_date',
-    'ynab_txn_id', 'memo', 'note', 'month', 'target_group', 'fee'
+    'ynab_txn_id', 'memo', 'note', 'month', 'target_group', 'fee', 'cashback'
   ],
   overrideHeaders: ['ynab_txn_id', 'bucket', 'points', 'notes'],
   buckets: ['MS', 'MS_CRYPTO', 'BILL_PAY'],
@@ -46,10 +58,13 @@ const XFER_CFG = {
       late_entry_days: '30',
       review_min_amount: '10'
     },
+    fluz: {
+      account_name: 'FLUZ'
+    },
     transfer_rules: {
       crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin',
-      bill_pay_regex: 'citibank|synchrony|syncb|credit card|card payment|cc payment|geico',
-      ms_regex: 'lemfi|wise|revolut|sling|morse|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom',
+      bill_pay_regex: 'citibank|\\bciti\\b|synchrony|syncb|credit card|card payment|cc payment|geico',
+      ms_regex: 'lemfi|wise|revolut|sling|morse|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom|astra|honey ?fund|apple wallet|apple cash',
       paypal_account_regex: '^PP',
       internal_account_regex: '^TK[BP]\\b',
       transfer_category_group: 'Transfer',
@@ -75,6 +90,9 @@ const XFER_CFG = {
       Current: 'current account|^CURR\\b|transfer : CURR\\b',
       OnePay: 'onepay|^OPYD\\b|transfer : OPYD\\b',
       MetaPay: 'metapay',
+      Astra: '\\bastra\\b',
+      'Honey Fund': 'honey ?fund',
+      'Apple Cash': 'apple wallet|apple cash|^APCA\\b|transfer : APCA\\b',
       Geico: 'geico',
       Fluz: '^FLUZ\\b|transfer : FLUZ\\b',
       PayPal: '^PP\\b|transfer : PP\\b|paypal'
@@ -93,6 +111,7 @@ function setupTransferProfit() {
   csvSyncLocked_('setupTransferProfit', () => pullYnabMirror_({ force: true, calledBy: 'setup' }));
   importYnabHistory(true);
   importTaekusCsvs();
+  importFluzCsvs();
   rebuildTransferLedger();
   applyViewFormulas_();
   applySummaryFormulas_();
@@ -105,7 +124,7 @@ function arrangeSheets_() {
   const ss = SpreadsheetApp.getActive();
   const order = [
     CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet,
-    XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw,
+    XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw,
     CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
   ];
   let pos = 1;
@@ -130,7 +149,8 @@ function installTransferTrigger() {
 
 function ensureTransferSheets_() {
   const ss = SpreadsheetApp.getActive();
-  [XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides].forEach((n) => ensureSheet_(ss, n));
+  [XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw, XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides]
+    .forEach((n) => ensureSheet_(ss, n));
   Object.values(XFER_CFG.views).forEach((n) => ensureSheet_(ss, n));
   const ov = ss.getSheetByName(XFER_CFG.sheets.overrides);
   if (ov.getLastRow() === 0) {
@@ -230,6 +250,64 @@ function taekusRowsFromCsvs_(files) {
   return Object.values(byKey).sort((a, b) => (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0));
 }
 
+// ---------------------------------------------------------------- Fluz CSV import
+
+function importFluzCsvs() {
+  ensureTransferSheets_();
+  const rows = fluzRowsFromCsvs_(driveCsvs_(XFER_CFG.fluzFolder));
+  const sh = SpreadsheetApp.getActive().getSheetByName(XFER_CFG.sheets.fluzRaw);
+  const w = XFER_CFG.fluzRawHeaders.length;
+  sh.clearContents();
+  sh.getRange(1, 1, 1, w).setValues([XFER_CFG.fluzRawHeaders]);
+  sh.setFrozenRows(1);
+  if (rows.length) {
+    const rng = sh.getRange(2, 1, rows.length, w);
+    rng.setNumberFormat('@');
+    rng.setValues(rows);
+  }
+  console.log('Fluz_Raw: ' + rows.length + ' rows');
+  return rows.length;
+}
+
+/**
+ * files: [{name, text}] oldest first. Merges every Fluz export by Transaction ID (later files win,
+ * so a newer export updates a PENDING row) and keeps the rows where money leaves Fluz.
+ */
+function fluzRowsFromCsvs_(files) {
+  const byId = {};
+  files.forEach((f) => {
+    const recs = readCsvText_(f.text);
+    if (!recs.length || !('Transaction ID' in recs[0]) || !('Cashback' in recs[0])) return;
+    recs.forEach((r) => {
+      const id = String(r['Transaction ID'] || '').trim();
+      if (id) byId[id] = Object.assign({ _file: f.name }, r);
+    });
+  });
+  const keep = new Set(XFER_CFG.fluzTypes);
+  const clean = (v) => (String(v == null ? '' : v).trim() === '--' ? '' : String(v == null ? '' : v).trim());
+  return Object.keys(byId).map((id) => byId[id])
+    .filter((r) => keep.has(String(r.Type).trim()) && !XFER_CFG.fluzSkipStatus.test(r.Status || ''))
+    .map((r) => [
+      clean(r['Transaction ID']), clean(r['Reference ID']), clean(r.Type), clean(r.Status), fluzIso_(r['Created At']),
+      clean(r['Created At']), toNumber_(r.Amount), clean(r.Destination), clean(r.Source).replace(/\s*\[.*?\]/g, ''),
+      toNumber_(r.Cashback), toNumber_(r['Cashback Rate']), toNumber_(r.Fee), clean(r.Description),
+      clean(r['Card name']), clean(r.Category), r._file
+    ])
+    .filter((r) => r[4])
+    .sort((a, b) => (a[4] < b[4] ? -1 : a[4] > b[4] ? 1 : 0));
+}
+
+/** Fluz "Created At": "Mon Oct 12 2026 20:21:44 GMT+0000 (...)" or "2026-10-16T16:52:53.446Z" (UTC). */
+function fluzIso_(s) {
+  const t = String(s || '');
+  let m = t.match(/^\s*(\d{4}-\d{2}-\d{2})T/);
+  if (m) return m[1];
+  m = t.match(/[A-Z][a-z]{2} ([A-Z][a-z]{2}) (\d{2}) (\d{4})/);
+  const mon = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08',
+    Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
+  return m && mon[m[1]] ? m[3] + '-' + mon[m[1]] + '-' + m[2] : '';
+}
+
 /** "05/28/2024 21:36 UTC" -> "2024-05-28" */
 function altIso_(s) {
   const m = String(s || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
@@ -245,6 +323,7 @@ function rebuildTransferLedger() {
     mirror: combinedMirror_(),
     accounts: ss.getSheetByName(CFG.sheets.ynabAccounts).getDataRange().getValues(),
     taekus: ss.getSheetByName(XFER_CFG.sheets.taekusRaw).getDataRange().getValues(),
+    fluz: ss.getSheetByName(XFER_CFG.sheets.fluzRaw).getDataRange().getValues(),
     overrides: ss.getSheetByName(XFER_CFG.sheets.overrides).getDataRange().getValues(),
     cfg: xferConfig_(),
     tz: ss.getSpreadsheetTimeZone()
@@ -262,7 +341,7 @@ function rebuildTransferLedger() {
     sh.getRange(2, 9, rows.length, 1).setNumberFormat('#,##0');
     sh.getRange(2, 11, rows.length, 1).setNumberFormat('$#,##0.00');
     sh.getRange(2, 12, rows.length, 1).setNumberFormat('0.00%');
-    sh.getRange(2, 21, rows.length, 1).setNumberFormat('$#,##0.00');
+    sh.getRange(2, 21, rows.length, 2).setNumberFormat('$#,##0.00');
   }
   console.log('Transfer_Ledger: ' + rows.length + ' rows');
   return rows.length;
@@ -299,8 +378,16 @@ function buildTransferLedgerRows_(input) {
     const m = name.match(/^TK[BP]\s*-\s*(\d{4})/i);
     if (m) taekusByLast4[m[1]] = id;
   });
+  // Source accounts: each Taekus account by its last 4, and the Fluz account as "FLUZ".
   const last4ById = {};
   Object.keys(taekusByLast4).forEach((l4) => { last4ById[taekusByLast4[l4]] = l4; });
+  const fluzName = String((cfg.fluz || {}).account_name || 'FLUZ').trim().toLowerCase();
+  Object.keys(accounts).forEach((id) => {
+    if (accounts[id].name.trim().toLowerCase() === fluzName) {
+      last4ById[id] = 'FLUZ';
+      taekusByLast4.FLUZ = id;
+    }
+  });
 
   // Mirror rows -> plain objects.
   const mh = mapHeaderIndexes_(input.mirror[0] || []);
@@ -346,9 +433,33 @@ function buildTransferLedgerRows_(input) {
     if (mirrorMin && iso < isoAddDays_(mirrorMin, -before)) return;
     csv.push({
       key: String(r[th.key]), last4: last4, iso: iso, cents: Math.round(amt * 100), amount: amt,
-      points: toNumber_(r[th.points]), desc: String(r[th.description] || ''), merchant: String(r[th.merchant] || '')
+      points: toNumber_(r[th.points]), desc: String(r[th.description] || ''), merchant: String(r[th.merchant] || ''),
+      cashback: 0, source: 'TAEKUS'
     });
   });
+
+  // Fluz rows (money leaving Fluz): cashback in dollars instead of points; matched by reference ID
+  // in the YNAB memo first (the Fluz sync writes "<ref> - ..."), then like Taekus rows.
+  const fz = input.fluz || [];
+  const fh = mapHeaderIndexes_(fz[0] || []);
+  if (taekusByLast4.FLUZ) {
+    fz.slice(1).forEach((r) => {
+      const iso = String(r[fh.date] || '');
+      if (!iso) return;
+      if (!csvMax.FLUZ || iso > csvMax.FLUZ) csvMax.FLUZ = iso;
+      if (!csvMin.FLUZ || iso < csvMin.FLUZ) csvMin.FLUZ = iso;
+      const amt = -toNumber_(r[fh.amount]);
+      if (amt <= 0) return;
+      if (mirrorMin && iso < isoAddDays_(mirrorMin, -before)) return;
+      const type = String(r[fh.type] || '');
+      csv.push({
+        key: String(r[fh.transaction_id]), last4: 'FLUZ', iso: iso, cents: Math.round(amt * 100), amount: amt,
+        points: 0, cashback: toNumber_(r[fh.cashback]) - Math.abs(toNumber_(r[fh.fee])),
+        desc: String(r[fh.destination] || '') + (r[fh.description] ? ' ' + r[fh.description] : ''),
+        merchant: String(r[fh.card_name] || ''), ref: String(r[fh.reference_id] || ''), type: type, source: 'FLUZ'
+      });
+    });
+  }
 
   // YNAB outflows from Taekus accounts.
   const tk = txns.filter((t) => last4ById[t.accountId] && t.outflow > 0);
@@ -372,6 +483,20 @@ function buildTransferLedgerRows_(input) {
   const csvUsed = {};
   const lateMatch = {};
   const byDate = (arr, get) => arr.slice().sort((a, b) => (get(a) < get(b) ? -1 : get(a) > get(b) ? 1 : a - b));
+  // Fluz: exact pairing first by a reference ID in the YNAB memo (same amount, to the cent).
+  const refIdx = {};
+  csv.forEach((c, j) => { if (c.ref) refIdx[c.ref] = j; });
+  tk.forEach((t, i) => {
+    if (last4ById[t.accountId] !== 'FLUZ') return;
+    const refs = t.memo.match(/\b\d{6,10}\b/g) || [];
+    for (let n = 0; n < refs.length; n += 1) {
+      const j = refIdx[refs[n]];
+      if (j === undefined || csvUsed[j] || Math.abs(csv[j].cents - Math.round(t.outflow * 100)) > 1) continue;
+      ynabToCsv[i] = j;
+      csvUsed[j] = true;
+      break;
+    }
+  });
   [after, Math.max(after, late)].forEach((maxAfter, pass) => {
     Object.keys(groups).forEach((k) => {
       const ys = byDate(groups[k].y.filter((i) => ynabToCsv[i] === undefined), (i) => tk[i].iso);
@@ -458,11 +583,12 @@ function buildTransferLedgerRows_(input) {
   const out = [];
   const emit = (o) => {
     const fee = o.fee || 0;
-    const profit = Math.round((o.points * pointValue - fee) * 100) / 100;
+    const cashback = o.cashback || 0;
+    const profit = Math.round((o.points * pointValue + cashback - fee) * 100) / 100;
     out.push([
-      isoToDate_(o.iso), 'TAEKUS', o.account, o.payee, o.target, o.targetType, o.amount, o.bucket,
-      o.points, pointValue, profit, o.amount ? profit / o.amount : 0, o.match, o.csvDesc, o.csvIso,
-      o.id, o.memo, o.note, o.iso.slice(0, 7), o.group, fee
+      isoToDate_(o.iso), o.source, o.account, o.payee, o.target, o.targetType, o.amount, o.bucket,
+      o.points, o.source === 'TAEKUS' ? pointValue : '', profit, o.amount ? profit / o.amount : 0, o.match,
+      o.csvDesc, o.csvIso, o.id, o.memo, o.note, o.iso.slice(0, 7), o.group, fee, cashback
     ]);
   };
 
@@ -489,7 +615,10 @@ function buildTransferLedgerRows_(input) {
     // (no transfer account or Transfer category) or the transfer went to PayPal (crypto via PayPal).
     const useCsv = c && ((!dst && !transferCat) || (dst && paypalRx.test(dst.name)));
     const text = [t.payee, t.category, t.memo, dst ? dst.name : '', useCsv ? c.desc + ' ' + c.merchant : ''].join(' ');
-    if (dst && internalRx.test(dst.name)) bucket = 'INTERNAL';
+    // A Fluz withdrawal just moves your own balance back to a bank account.
+    if ((dst && internalRx.test(dst.name)) || (c && c.type === 'Withdrawal')) bucket = 'INTERNAL';
+    // Fee charges of their own (e.g. "Fluz Fee" for card-funded loads) aren't transfers.
+    else if (!dst && /\bfees?\b/i.test([t.payee, t.category, t.catGroup].join(' '))) bucket = 'OTHER';
     else if (dst && CFG.debtTypes.has(dst.type)) bucket = 'BILL_PAY';
     else if (cryptoRx.test(text)) bucket = 'MS_CRYPTO';
     else if (dst && paypalRx.test(dst.name)) {
@@ -519,7 +648,8 @@ function buildTransferLedgerRows_(input) {
     }
 
     emit({
-      iso: t.iso, account: t.account, payee: t.payee, target: dst ? dst.name : t.payee,
+      iso: t.iso, source: last4 === 'FLUZ' ? 'FLUZ' : 'TAEKUS', account: t.account, payee: t.payee,
+      target: dst ? dst.name : t.payee, cashback: c ? c.cashback : 0,
       targetType: dst ? dst.type : '', amount: t.outflow, bucket: bucket, points: points, match: match,
       csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: t.fee,
       group: (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
@@ -533,9 +663,11 @@ function buildTransferLedgerRows_(input) {
   csv.forEach((c, j) => {
     // Tiny charges (e.g. Geico micro-payments) are lumped together in YNAB; don't flag them.
     if (csvUsed[j] || c.amount < reviewMin || c.iso < isoAddDays_(mirrorMin, after)) return;
+    if (c.type === 'Withdrawal') return;
     const accId = taekusByLast4[c.last4];
     emit({
-      iso: c.iso, account: accounts[accId].name, payee: c.desc, target: c.merchant || c.desc, targetType: '',
+      iso: c.iso, source: c.source, cashback: c.cashback,
+      account: accounts[accId].name, payee: c.desc, target: c.merchant || c.desc, targetType: '',
       amount: c.amount, bucket: 'REVIEW', points: c.points, match: 'not in YNAB', csvDesc: c.desc,
       csvIso: c.iso, id: '', memo: '', note: c.key,
       group: targetGroup_([c.desc, c.merchant], aliases) || c.desc
@@ -589,40 +721,43 @@ function setTransferView_(sheetName, bucket) {
   const sheet = ensureSheet_(SpreadsheetApp.getActive(), sheetName);
   const L = XFER_CFG.sheets.ledger;
   sheet.clear();
-  sheet.getRange('A1:G1').setValues([['Transfers', 'Amount', 'Points', 'Fees', 'Profit (net)', 'Avg rate', 'Last 30 days profit']]);
-  sheet.getRange('A2:G2').setFormulas([[
+  sheet.getRange('A1:H1').setValues([['Transfers', 'Amount', 'Taekus points', 'Fluz cashback', 'Fees',
+    'Profit (net)', 'Avg rate', 'Last 30 days profit']]);
+  sheet.getRange('A2:H2').setFormulas([[
     `=COUNTIF('${L}'!H:H,"${bucket}")`,
     `=SUMIFS('${L}'!G:G,'${L}'!H:H,"${bucket}")`,
     `=SUMIFS('${L}'!I:I,'${L}'!H:H,"${bucket}")`,
+    `=SUMIFS('${L}'!V:V,'${L}'!H:H,"${bucket}")`,
     `=SUMIFS('${L}'!U:U,'${L}'!H:H,"${bucket}")`,
     `=SUMIFS('${L}'!K:K,'${L}'!H:H,"${bucket}")`,
-    '=IFERROR(E2/B2,0)',
+    '=IFERROR(F2/B2,0)',
     `=SUMIFS('${L}'!K:K,'${L}'!H:H,"${bucket}",'${L}'!A:A,">="&(TODAY()-30))`
   ]]);
-  sheet.getRange('A1:G1').setFontWeight('bold');
+  sheet.getRange('A1:H1').setFontWeight('bold');
   sheet.getRange('B2').setNumberFormat('$#,##0.00');
   sheet.getRange('C2').setNumberFormat('#,##0');
-  sheet.getRange('D2:E2').setNumberFormat('$#,##0.00');
-  sheet.getRange('F2').setNumberFormat('0.00%');
-  sheet.getRange('G2').setNumberFormat('$#,##0.00');
+  sheet.getRange('D2:F2').setNumberFormat('$#,##0.00');
+  sheet.getRange('G2').setNumberFormat('0.00%');
+  sheet.getRange('H2').setNumberFormat('$#,##0.00');
 
-  // Transactions: A4:M
+  // Transactions: A4:N
   sheet.getRange('A4').setFormula(
-    `=IFERROR(QUERY('${L}'!A1:U,"select A,C,D,T,G,I,U,K,L,M,R,Q,P where H = '${bucket}' order by A desc ` +
-    `label A 'date', C 'account', D 'payee', T 'target', G 'amount', I 'points', U 'fee', K 'profit', L 'rate', ` +
-    `M 'match', R 'note', Q 'memo', P 'ynab_txn_id'",1),"")`);
-  // Monthly: O4:T
-  sheet.getRange('O4').setFormula(
-    `=IFERROR(QUERY('${L}'!A1:U,"select S, count(G), sum(G), sum(I), sum(U), sum(K) where H = '${bucket}' group by S order by S desc ` +
-    `label S 'month', count(G) 'transfers', sum(G) 'amount', sum(I) 'points', sum(U) 'fees', sum(K) 'profit'",1),"")`);
+    `=IFERROR(QUERY('${L}'!A1:V,"select A,C,D,T,G,I,V,U,K,L,M,R,Q,P where H = '${bucket}' order by A desc ` +
+    `label A 'date', C 'account', D 'payee', T 'target', G 'amount', I 'points', V 'cashback', U 'fee', ` +
+    `K 'profit', L 'rate', M 'match', R 'note', Q 'memo', P 'ynab_txn_id'",1),"")`);
+  // Monthly: P4:V
+  sheet.getRange('P4').setFormula(
+    `=IFERROR(QUERY('${L}'!A1:V,"select S, count(G), sum(G), sum(I), sum(V), sum(U), sum(K) where H = '${bucket}' ` +
+    `group by S order by S desc label S 'month', count(G) 'transfers', sum(G) 'amount', sum(I) 'points', ` +
+    `sum(V) 'cashback', sum(U) 'fees', sum(K) 'profit'",1),"")`);
   sheet.getRange('A5:A').setNumberFormat('yyyy-mm-dd');
   sheet.getRange('E5:E').setNumberFormat('$#,##0.00');
   sheet.getRange('F5:F').setNumberFormat('#,##0');
-  sheet.getRange('G5:H').setNumberFormat('$#,##0.00');
-  sheet.getRange('I5:I').setNumberFormat('0.00%');
-  sheet.getRange('Q5:Q').setNumberFormat('$#,##0.00');
-  sheet.getRange('R5:R').setNumberFormat('#,##0');
-  sheet.getRange('S5:T').setNumberFormat('$#,##0.00');
-  sheet.getRange('A4:T4').setFontWeight('bold');
+  sheet.getRange('G5:I').setNumberFormat('$#,##0.00');
+  sheet.getRange('J5:J').setNumberFormat('0.00%');
+  sheet.getRange('R5:R').setNumberFormat('$#,##0.00');
+  sheet.getRange('S5:S').setNumberFormat('#,##0');
+  sheet.getRange('T5:V').setNumberFormat('$#,##0.00');
+  sheet.getRange('A4:V4').setFontWeight('bold');
   sheet.setFrozenRows(4);
 }

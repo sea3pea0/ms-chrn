@@ -62,6 +62,7 @@ function syncYnabMirror_(opts) {
     importYnabHistory();
 
     importTaekusCsvs();
+    importFluzCsvs();
     rebuildTransferLedger();
     if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet)) rebuildTargetStats();
     else { setupTargetDashboard(); arrangeSheets_(); } // first run after a setup that ran out of time
