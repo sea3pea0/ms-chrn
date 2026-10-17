@@ -589,6 +589,7 @@ function buildTransferLedgerRows_(input) {
   // Blue Penguin settles: your share of the interchange is the cash back. Matched by the Event ID in
   // the YNAB memo first (the Blue Penguin sync writes "BP <id> - ..."), then like Taekus rows.
   const bp = input.blupe || [];
+  const bpRefunds = [];
   const bh = mapHeaderIndexes_(bp[0] || []);
   if (taekusByLast4.BLUPE) {
     bp.slice(1).forEach((r) => {
@@ -596,6 +597,10 @@ function buildTransferLedgerRows_(input) {
       if (!iso) return;
       if (!csvMax.BLUPE || iso > csvMax.BLUPE) csvMax.BLUPE = iso;
       if (!csvMin.BLUPE || iso < csvMin.BLUPE) csvMin.BLUPE = iso;
+      if (String(r[bh.type]) === 'Refund' && iso >= mirrorMin) {
+        bpRefunds.push({ id: String(r[bh.event_id]), iso: iso, amount: Math.abs(toNumber_(r[bh.amount])),
+          interchange: Math.abs(toNumber_(r[bh.interchange])), desc: String(r[bh.description] || '') });
+      }
       if (String(r[bh.type]) !== 'Settle') return;
       const amt = toNumber_(r[bh.amount]);
       if (amt <= 0 || (mirrorMin && iso < isoAddDays_(mirrorMin, -before))) return;
@@ -871,6 +876,33 @@ function buildTransferLedgerRows_(input) {
         targetGroup_([dst ? dst.name : '', t.payee, t.splitPayees], aliases) ||
         (useCsv && targetGroup_([c.desc], aliases)) || (dst ? dst.name : t.payee)
     });
+  });
+
+  // Blue Penguin refunds reverse the interchange (and so the cash back) of the purchase they undo.
+  // Each becomes a negative row in the bucket of what was refunded, linked to the YNAB inflow.
+  const refundUsed = {};
+  bpRefunds.forEach((f) => {
+    const inflow = txns.find((t) => last4ById[t.accountId] === 'BLUPE' && !refundUsed[t.id] &&
+      Math.abs(t.inflow - f.amount) < 0.01 && Math.abs(isoDays_(t.iso) - isoDays_(f.iso)) <= after);
+    if (inflow) refundUsed[inflow.id] = true;
+    // Bucket of the purchase being undone: the latest same-amount Blue Penguin transfer in the
+    // 30 days before; else guess from the descriptor.
+    const fd = isoDays_(f.iso);
+    const orig = out.filter((r) => r[1] === 'BLUPE' && Math.abs(r[6] - f.amount) < 0.01 &&
+      XFER_CFG.buckets.indexOf(r[7]) >= 0 && fd - isoDays_(r[18] + '-01') >= 0)
+      .map((r) => ({ bucket: r[7], group: r[19], d: isoDays_(cellIso_(r[0])) }))
+      .filter((o) => fd - o.d >= 0 && fd - o.d <= 30)
+      .sort((a, b) => b.d - a.d)[0];
+    const group = orig ? orig.group : targetGroup_([f.desc], aliases) || f.desc;
+    let bucket = orig ? orig.bucket : 'MS';
+    if (!orig && cryptoRx.test(f.desc)) bucket = 'MS_CRYPTO';
+    else if (!orig && billRx.test(f.desc)) bucket = 'BILL_PAY';
+    const back = -Math.round(f.interchange * blupeShare * 100) / 100;
+    out.push([
+      isoToDate_(f.iso), 'BLUPE', accounts[taekusByLast4.BLUPE].name, inflow ? inflow.payee : f.desc, group, '',
+      -f.amount, bucket, 0, '', back, f.amount ? back / -f.amount : 0, 'refund', f.desc, f.iso,
+      inflow ? inflow.id : '', inflow ? inflow.memo : '', 'BP ' + f.id + ' refund', f.iso.slice(0, 7), group, 0, back
+    ]);
   });
 
   // Taekus outflows with no YNAB transaction (only where the mirror covers the dates).
