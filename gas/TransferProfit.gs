@@ -42,7 +42,9 @@ const XFER_CFG = {
     taekus: {
       point_value: '0.01',
       match_days_before: '7',
-      match_days_after: '10'
+      match_days_after: '10',
+      late_entry_days: '30',
+      review_min_amount: '10'
     },
     transfer_rules: {
       crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin',
@@ -271,6 +273,8 @@ function buildTransferLedgerRows_(input) {
   const pointValue = Number(cfg.taekus.point_value) || 0.01;
   const before = Number(cfg.taekus.match_days_before) || 7;
   const after = Number(cfg.taekus.match_days_after) || 10;
+  const late = Number(cfg.taekus.late_entry_days) || 30;
+  const reviewMin = Number(cfg.taekus.review_min_amount) || 0;
   const rx = (k) => new RegExp(cfg.transfer_rules[k], 'i');
   const cryptoRx = rx('crypto_regex');
   const billRx = rx('bill_pay_regex');
@@ -326,11 +330,13 @@ function buildTransferLedgerRows_(input) {
   const th = mapHeaderIndexes_(input.taekus[0] || []);
   const csv = [];
   const csvMax = {};
+  const csvMin = {};
   input.taekus.slice(1).forEach((r) => {
     const last4 = String(r[th.account_last4] || '').padStart(4, '0');
     const iso = String(r[th.date] || '');
     if (!iso || !taekusByLast4[last4]) return;
     if (!csvMax[last4] || iso > csvMax[last4]) csvMax[last4] = iso;
+    if (!csvMin[last4] || iso < csvMin[last4]) csvMin[last4] = iso;
     const amt = -toNumber_(r[th.amount]);
     if (amt <= 0 || String(r[th.refund]).toLowerCase() === 'true') return;
     if (mirrorMin && iso < isoAddDays_(mirrorMin, -before)) return;
@@ -353,22 +359,35 @@ function buildTransferLedgerRows_(input) {
     const k = c.last4 + '|' + c.cents;
     if (groups[k]) groups[k].c.push(j);
   });
+  // Within each account + amount group, walk both sides in date order and give each Taekus row
+  // the earliest unused YNAB entry inside the window. Order-preserving matching keeps long runs of
+  // identical $1,000 buys (YNAB often batch-dated a few days off) from stranding rows at the edges.
+  // Pass 2 pairs what is left with YNAB entries made up to late_entry_days after the Taekus date
+  // (batches typed in weeks later, e.g. PayPal crypto buys).
   const ynabToCsv = {};
   const csvUsed = {};
-  Object.keys(groups).forEach((k) => {
-    const g = groups[k];
-    const pairs = [];
-    g.y.forEach((i) => {
-      g.c.forEach((j) => {
-        const dd = isoDays_(tk[i].iso) - isoDays_(csv[j].iso);
-        if (dd >= -before && dd <= after) pairs.push([Math.abs(dd), tk[i].iso, i, j]);
+  const lateMatch = {};
+  const byDate = (arr, get) => arr.slice().sort((a, b) => (get(a) < get(b) ? -1 : get(a) > get(b) ? 1 : a - b));
+  [after, Math.max(after, late)].forEach((maxAfter, pass) => {
+    Object.keys(groups).forEach((k) => {
+      const ys = byDate(groups[k].y.filter((i) => ynabToCsv[i] === undefined), (i) => tk[i].iso);
+      const cs = byDate(groups[k].c.filter((j) => !csvUsed[j]), (j) => csv[j].iso);
+      let p = 0;
+      const taken = {};
+      cs.forEach((j) => {
+        const cd = isoDays_(csv[j].iso);
+        while (p < ys.length && (taken[p] || isoDays_(tk[ys[p]].iso) - cd < -before)) p += 1;
+        for (let q = p; q < ys.length; q += 1) {
+          if (taken[q]) continue;
+          const dd = isoDays_(tk[ys[q]].iso) - cd;
+          if (dd > maxAfter) break;
+          taken[q] = true;
+          ynabToCsv[ys[q]] = j;
+          csvUsed[j] = true;
+          if (pass === 1) lateMatch[ys[q]] = true;
+          break;
+        }
       });
-    });
-    pairs.sort((a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
-    pairs.forEach((p) => {
-      if (ynabToCsv[p[2]] !== undefined || csvUsed[p[3]]) return;
-      ynabToCsv[p[2]] = p[3];
-      csvUsed[p[3]] = true;
     });
   });
 
@@ -411,10 +430,12 @@ function buildTransferLedgerRows_(input) {
     const j = ynabToCsv[i];
     const c = j === undefined ? null : csv[j];
     const dst = accounts[t.dstId] || null;
-    let match = 'matched';
+    let match = lateMatch[i] ? 'matched (late entry)' : 'matched';
     if (!c) {
       if (!csvMax[last4]) match = 'no csv for account';
-      else match = t.iso > csvMax[last4] ? 'awaiting csv' : 'no csv row';
+      else if (t.iso > csvMax[last4]) match = 'awaiting csv';
+      else if (t.iso < csvMin[last4]) match = 'before csv start';
+      else match = 'no csv row';
     }
 
     const text = [t.payee, t.category, t.memo, dst ? dst.name : '', c ? c.desc + ' ' + c.merchant : ''].join(' ');
@@ -464,7 +485,8 @@ function buildTransferLedgerRows_(input) {
 
   // Taekus outflows with no YNAB transaction (only where the mirror covers the dates).
   csv.forEach((c, j) => {
-    if (csvUsed[j] || c.iso < isoAddDays_(mirrorMin, after)) return;
+    // Tiny charges (e.g. Geico micro-payments) are lumped together in YNAB; don't flag them.
+    if (csvUsed[j] || c.amount < reviewMin || c.iso < isoAddDays_(mirrorMin, after)) return;
     const accId = taekusByLast4[c.last4];
     emit({
       iso: c.iso, account: accounts[accId].name, payee: c.desc, target: c.merchant || c.desc, targetType: '',
