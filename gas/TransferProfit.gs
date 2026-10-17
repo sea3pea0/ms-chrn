@@ -48,7 +48,7 @@ const XFER_CFG = {
     },
     transfer_rules: {
       crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin',
-      bill_pay_regex: 'citibank|synchrony|syncb|credit card|card payment|cc payment',
+      bill_pay_regex: 'citibank|synchrony|syncb|credit card|card payment|cc payment|geico',
       ms_regex: 'lemfi|wise|revolut|sling|morse|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom',
       paypal_account_regex: '^PP',
       internal_account_regex: '^TK[BP]\\b',
@@ -75,6 +75,7 @@ const XFER_CFG = {
       Current: 'current account|^CURR\\b|transfer : CURR\\b',
       OnePay: 'onepay|^OPYD\\b|transfer : OPYD\\b',
       MetaPay: 'metapay',
+      Geico: 'geico',
       Fluz: '^FLUZ\\b|transfer : FLUZ\\b',
       PayPal: '^PP\\b|transfer : PP\\b|paypal'
     }
