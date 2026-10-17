@@ -333,22 +333,36 @@ function applySummaryFormulas_() {
   sh.getRange('A7').setValue('Total');
   sh.getRange('B7:E7').setFormulas([['=SUM(B4:B6)', '=SUM(C4:C6)', '=SUM(D4:D6)', '=SUM(E4:E6)']]);
   sh.getRange('F7').setFormula('=IFERROR(E7/C7,0)');
-  sh.getRange('A8').setValue('Needs review');
-  sh.getRange('B8').setFormula(`=COUNTIF('${L}'!H:H,"REVIEW")+COUNTIF('${L}'!M:M,"no csv row*")`);
-  sh.getRange('C4:C7').setNumberFormat('$#,##0.00');
-  sh.getRange('D4:D7').setNumberFormat('#,##0');
-  sh.getRange('E4:E7').setNumberFormat('$#,##0.00');
-  sh.getRange('F4:F7').setNumberFormat('0.00%');
+  // Fluz load fees (card-funded Add Money) can't be tied to a transfer; they come off the total here.
+  sh.getRange('A8').setValue('Fluz load fees');
+  sh.getRange('B8').setFormula(`=COUNTIF('${L}'!H:H,"FLUZ_FEE")`);
+  sh.getRange('E8').setFormula(`=SUMIFS('${L}'!K:K,'${L}'!H:H,"FLUZ_FEE")`);
+  sh.getRange('A9').setValue('Net profit after fees');
+  sh.getRange('E9').setFormula('=E7+E8');
+  sh.getRange('F9').setFormula('=IFERROR(E9/C7,0)');
+  sh.getRange('A10').setValue('Needs review');
+  sh.getRange('B10').setFormula(`=COUNTIF('${L}'!H:H,"REVIEW")+COUNTIF('${L}'!M:M,"no csv row*")`);
+  sh.getRange('C4:C9').setNumberFormat('$#,##0.00');
+  sh.getRange('D4:D9').setNumberFormat('#,##0');
+  sh.getRange('E4:E9').setNumberFormat('$#,##0.00');
+  sh.getRange('F4:F9').setNumberFormat('0.00%');
   sh.getRange('A3:F3').setFontWeight('bold');
   sh.getRange('A7:F7').setFontWeight('bold');
+  sh.getRange('A9:F9').setFontWeight('bold');
+  // Fluz load fees by month
+  sh.getRange('H3').setFormula(
+    `=IFERROR(QUERY('${L}'!A1:V,"select S, count(G), sum(G) where H = 'FLUZ_FEE' group by S order by S desc ` +
+    `label S 'Fluz fee month', count(G) 'charges', sum(G) 'fees'",1),"")`);
+  sh.getRange('J4:J').setNumberFormat('$#,##0.00');
+  sh.getRange('H3:J3').setFontWeight('bold');
 
-  sh.getRange('A11:C11').setValues([['Sync Info', 'Value', 'Notes']]);
-  sh.getRange('A12').setValue('Last API Sync (epoch ms)');
-  sh.getRange('B12').setValue(PropertiesService.getDocumentProperties().getProperty('YNAB_LAST_SYNC_EPOCH_MS') || '');
-  sh.getRange('A13').setValue('Server Knowledge');
-  sh.getRange('B13').setValue(PropertiesService.getDocumentProperties().getProperty('YNAB_SERVER_KNOWLEDGE') || '');
-  sh.getRange('A14').setValue('Sync Cooldown Minutes');
-  sh.getRange('B14').setFormula(`=IFERROR(VLOOKUP("sync_min_minutes",FILTER(${CFG.sheets.config}!B:C,${CFG.sheets.config}!A:A="sync"),2,FALSE),20)`);
+  sh.getRange('A12:C12').setValues([['Sync Info', 'Value', 'Notes']]);
+  sh.getRange('A13').setValue('Last API Sync (epoch ms)');
+  sh.getRange('B13').setValue(PropertiesService.getDocumentProperties().getProperty('YNAB_LAST_SYNC_EPOCH_MS') || '');
+  sh.getRange('A14').setValue('Server Knowledge');
+  sh.getRange('B14').setValue(PropertiesService.getDocumentProperties().getProperty('YNAB_SERVER_KNOWLEDGE') || '');
+  sh.getRange('A15').setValue('Sync Cooldown Minutes');
+  sh.getRange('B15').setFormula(`=IFERROR(VLOOKUP("sync_min_minutes",FILTER(${CFG.sheets.config}!B:C,${CFG.sheets.config}!A:A="sync"),2,FALSE),20)`);
 
   sh.setFrozenRows(3);
 }

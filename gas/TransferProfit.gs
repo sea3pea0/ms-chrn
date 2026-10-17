@@ -617,8 +617,11 @@ function buildTransferLedgerRows_(input) {
     const text = [t.payee, t.category, t.memo, dst ? dst.name : '', useCsv ? c.desc + ' ' + c.merchant : ''].join(' ');
     // A Fluz withdrawal just moves your own balance back to a bank account.
     if ((dst && internalRx.test(dst.name)) || (c && c.type === 'Withdrawal')) bucket = 'INTERNAL';
-    // Fee charges of their own (e.g. "Fluz Fee" for card-funded loads) aren't transfers.
-    else if (!dst && /\bfees?\b/i.test([t.payee, t.category, t.catGroup].join(' '))) bucket = 'OTHER';
+    // Fee charges of their own aren't transfers. Fluz's (card-funded loads) can't be tied to a
+    // transfer, so they get their own bucket and come off total profit on the Summary.
+    else if (!dst && /\bfees?\b/i.test([t.payee, t.category, t.catGroup].join(' '))) {
+      bucket = last4 === 'FLUZ' ? 'FLUZ_FEE' : 'OTHER';
+    }
     else if (dst && CFG.debtTypes.has(dst.type)) bucket = 'BILL_PAY';
     else if (cryptoRx.test(text)) bucket = 'MS_CRYPTO';
     else if (dst && paypalRx.test(dst.name)) {
@@ -639,6 +642,9 @@ function buildTransferLedgerRows_(input) {
     else if (transferCat || dst || msRx.test(text)) bucket = 'MS';
 
     let points = c ? c.points : 0;
+    // A Fluz fee row is all cost: the whole charge counts as fee.
+    const rowFee = bucket === 'FLUZ_FEE' ? t.outflow : t.fee;
+    if (bucket === 'FLUZ_FEE') match = 'fee charge';
     const ov = overrides[t.id];
     if (ov) {
       if (ov.bucket) bucket = ov.bucket;
@@ -651,7 +657,7 @@ function buildTransferLedgerRows_(input) {
       iso: t.iso, source: last4 === 'FLUZ' ? 'FLUZ' : 'TAEKUS', account: t.account, payee: t.payee,
       target: dst ? dst.name : t.payee, cashback: c ? c.cashback : 0,
       targetType: dst ? dst.type : '', amount: t.outflow, bucket: bucket, points: points, match: match,
-      csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: t.fee,
+      csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: rowFee,
       group: (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
         (transferCat && (targetGroup_([transferCat], aliases) || transferCat)) ||
         targetGroup_([dst ? dst.name : '', t.payee, t.splitPayees], aliases) ||
