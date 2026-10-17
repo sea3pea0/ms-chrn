@@ -25,15 +25,21 @@
 const XFER_CFG = {
   taekusFolder: 'Taekus Transaction CSVs',
   fluzFolder: 'Fluz Transaction CSVs',
+  blupeFolder: 'Blue Penguin Transaction CSVs',
   sheets: {
     taekusRaw: 'Taekus_Raw',
     fluzRaw: 'Fluz_Raw',
+    blupeRaw: 'BLUPE_Raw',
     ledger: 'Transfer_Ledger',
     overrides: 'Transfer_Overrides'
   },
   taekusRawHeaders: [
     'key', 'account_last4', 'date', 'datetime', 'posted_date', 'description', 'merchant', 'mcc',
     'amount', 'points', 'uuid', 'mid', 'refund', 'settled', 'card_nickname', 'file'
+  ],
+  blupeRawHeaders: [
+    'event_id', 'type', 'date', 'amount', 'interchange', 'effective_rate', 'description', 'category',
+    'card_type', 'last4', 'file'
   ],
   fluzRawHeaders: [
     'transaction_id', 'reference_id', 'type', 'status', 'date', 'created_at', 'amount', 'destination',
@@ -61,9 +67,14 @@ const XFER_CFG = {
     fluz: {
       account_name: 'FLUZ'
     },
+    blupe: {
+      account_name: 'BLUPE',
+      interchange_share: '0.6841',
+      rebate_payee_regex: 'blue penguin'
+    },
     transfer_rules: {
       crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin',
-      bill_pay_regex: 'citibank|\\bciti\\b|synchrony|syncb|credit card|card payment|cc payment|geico',
+      bill_pay_regex: 'citibank|\\bciti\\b|synchrony|syncb|credit card|card payment|cc payment|geico|americanexp|amex|barclaycard|discovercar|bankamerica',
       ms_regex: 'lemfi|wise|revolut|sling|morse|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom|astra|honey ?fund|apple wallet|apple cash',
       paypal_account_regex: '^PP',
       internal_account_regex: '^TK[BP]\\b',
@@ -94,6 +105,9 @@ const XFER_CFG = {
       'Honey Fund': 'honey ?fund',
       'Apple Cash': 'apple wallet|apple cash|^APCA\\b|transfer : APCA\\b',
       Geico: 'geico',
+      'American Express': 'americanexp|american express|\\bamex\\b',
+      Barclaycard: 'barclaycard',
+      Discover: 'discovercar|discover card',
       Fluz: '^FLUZ\\b|transfer : FLUZ\\b',
       PayPal: '^PP\\b|transfer : PP\\b|paypal'
     }
@@ -112,6 +126,7 @@ function setupTransferProfit() {
   importYnabHistory(true);
   importTaekusCsvs();
   importFluzCsvs();
+  importBlupeCsvs();
   rebuildTransferLedger();
   applyViewFormulas_();
   applySummaryFormulas_();
@@ -125,6 +140,7 @@ function arrangeSheets_() {
   const order = [
     CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet,
     XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw,
+    XFER_CFG.sheets.blupeRaw,
     CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
   ];
   let pos = 1;
@@ -149,7 +165,8 @@ function installTransferTrigger() {
 
 function ensureTransferSheets_() {
   const ss = SpreadsheetApp.getActive();
-  [XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw, XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides]
+  [XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw, XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.ledger,
+    XFER_CFG.sheets.overrides]
     .forEach((n) => ensureSheet_(ss, n));
   Object.values(XFER_CFG.views).forEach((n) => ensureSheet_(ss, n));
   const ov = ss.getSheetByName(XFER_CFG.sheets.overrides);
@@ -250,6 +267,47 @@ function taekusRowsFromCsvs_(files) {
   return Object.values(byKey).sort((a, b) => (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0));
 }
 
+// ---------------------------------------------------------------- Blue Penguin CSV import
+
+function importBlupeCsvs() {
+  ensureTransferSheets_();
+  const rows = blupeRowsFromCsvs_(driveCsvs_(XFER_CFG.blupeFolder));
+  const sh = SpreadsheetApp.getActive().getSheetByName(XFER_CFG.sheets.blupeRaw);
+  const w = XFER_CFG.blupeRawHeaders.length;
+  sh.clearContents();
+  sh.getRange(1, 1, 1, w).setValues([XFER_CFG.blupeRawHeaders]);
+  sh.setFrozenRows(1);
+  if (rows.length) {
+    const rng = sh.getRange(2, 1, rows.length, w);
+    rng.setNumberFormat('@');
+    rng.setValues(rows);
+  }
+  console.log('BLUPE_Raw: ' + rows.length + ' rows');
+  return rows.length;
+}
+
+/** Blue Penguin settlement reports, merged by Event ID (later files win). */
+function blupeRowsFromCsvs_(files) {
+  const byId = {};
+  files.forEach((f) => {
+    const recs = readCsvText_(f.text);
+    if (!recs.length || !('Event ID' in recs[0]) || !('Interchange' in recs[0])) return;
+    recs.forEach((r) => {
+      const id = String(r['Event ID'] || '').trim();
+      if (id) byId[id] = Object.assign({ _file: f.name }, r);
+    });
+  });
+  return Object.keys(byId).map((id) => byId[id])
+    .map((r) => [
+      String(r['Event ID']).trim(), String(r.Type || '').trim(), String(r.DateTime || '').trim().slice(0, 10),
+      Math.abs(toNumber_(r.Amount)), toNumber_(r.Interchange), String(r['Effective rate'] || '').trim(),
+      String(r.Description || '').replace(/\s+/g, ' ').trim(), String(r.Category || '').trim(),
+      String(r['Card type'] || '').trim(), String(r['Last 4'] || '').trim(), r._file
+    ])
+    .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r[2]))
+    .sort((a, b) => (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0));
+}
+
 // ---------------------------------------------------------------- Fluz CSV import
 
 function importFluzCsvs() {
@@ -324,6 +382,7 @@ function rebuildTransferLedger() {
     accounts: ss.getSheetByName(CFG.sheets.ynabAccounts).getDataRange().getValues(),
     taekus: ss.getSheetByName(XFER_CFG.sheets.taekusRaw).getDataRange().getValues(),
     fluz: ss.getSheetByName(XFER_CFG.sheets.fluzRaw).getDataRange().getValues(),
+    blupe: ss.getSheetByName(XFER_CFG.sheets.blupeRaw).getDataRange().getValues(),
     overrides: ss.getSheetByName(XFER_CFG.sheets.overrides).getDataRange().getValues(),
     cfg: xferConfig_(),
     tz: ss.getSpreadsheetTimeZone()
@@ -378,7 +437,7 @@ function buildTransferLedgerRows_(input) {
     const m = name.match(/^TK[BP]\s*-\s*(\d{4})/i);
     if (m) taekusByLast4[m[1]] = id;
   });
-  // Source accounts: each Taekus account by its last 4, and the Fluz account as "FLUZ".
+  // Source accounts: each Taekus account by its last 4, Fluz as "FLUZ", Blue Penguin as "BLUPE".
   const last4ById = {};
   Object.keys(taekusByLast4).forEach((l4) => { last4ById[taekusByLast4[l4]] = l4; });
   const fluzName = String((cfg.fluz || {}).account_name || 'FLUZ').trim().toLowerCase();
@@ -386,6 +445,16 @@ function buildTransferLedgerRows_(input) {
     if (accounts[id].name.trim().toLowerCase() === fluzName) {
       last4ById[id] = 'FLUZ';
       taekusByLast4.FLUZ = id;
+    }
+  });
+  const blupeCfg = cfg.blupe || {};
+  const blupeName = String(blupeCfg.account_name || 'BLUPE').trim().toLowerCase();
+  const blupeShare = Number(blupeCfg.interchange_share) || 0;
+  const rebateRx = new RegExp(blupeCfg.rebate_payee_regex || 'blue penguin', 'i');
+  Object.keys(accounts).forEach((id) => {
+    if (accounts[id].name.trim().toLowerCase() === blupeName) {
+      last4ById[id] = 'BLUPE';
+      taekusByLast4.BLUPE = id;
     }
   });
 
@@ -409,6 +478,7 @@ function buildTransferLedgerRows_(input) {
       catGroup: String(r[mh['Category Group']] || ''),
       memo: String(r[mh.Memo] || ''),
       outflow: toNumber_(r[mh.Outflow]),
+      inflow: toNumber_(r[mh.Inflow]),
       fee: mh.split_fee === undefined ? 0 : toNumber_(r[mh.split_fee]),
       // Payees of a split's other lines, e.g. the "Western Union" fee line next to a transfer
       // to SOFD: Western Union is the real target there.
@@ -461,7 +531,29 @@ function buildTransferLedgerRows_(input) {
     });
   }
 
-  // YNAB outflows from Taekus accounts.
+  // Blue Penguin settles: your share of the interchange is the cash back. Matched by the Event ID in
+  // the YNAB memo first (the Blue Penguin sync writes "BP <id> - ..."), then like Taekus rows.
+  const bp = input.blupe || [];
+  const bh = mapHeaderIndexes_(bp[0] || []);
+  if (taekusByLast4.BLUPE) {
+    bp.slice(1).forEach((r) => {
+      const iso = String(r[bh.date] || '');
+      if (!iso) return;
+      if (!csvMax.BLUPE || iso > csvMax.BLUPE) csvMax.BLUPE = iso;
+      if (!csvMin.BLUPE || iso < csvMin.BLUPE) csvMin.BLUPE = iso;
+      if (String(r[bh.type]) !== 'Settle') return;
+      const amt = toNumber_(r[bh.amount]);
+      if (amt <= 0 || (mirrorMin && iso < isoAddDays_(mirrorMin, -before))) return;
+      csv.push({
+        key: String(r[bh.event_id]), last4: 'BLUPE', iso: iso, cents: Math.round(amt * 100), amount: amt,
+        points: 0, cashback: Math.round(toNumber_(r[bh.interchange]) * blupeShare * 100) / 100,
+        desc: String(r[bh.description] || ''), merchant: '', ref: 'BP ' + String(r[bh.event_id]), type: 'Settle',
+        source: 'BLUPE'
+      });
+    });
+  }
+
+  // YNAB outflows from the source accounts.
   const tk = txns.filter((t) => last4ById[t.accountId] && t.outflow > 0);
 
   // Match: same account + amount, date window; closest dates first, one-to-one.
@@ -483,12 +575,14 @@ function buildTransferLedgerRows_(input) {
   const csvUsed = {};
   const lateMatch = {};
   const byDate = (arr, get) => arr.slice().sort((a, b) => (get(a) < get(b) ? -1 : get(a) > get(b) ? 1 : a - b));
-  // Fluz: exact pairing first by a reference ID in the YNAB memo (same amount, to the cent).
+  // Fluz / Blue Penguin: exact pairing first by a reference ID in the YNAB memo (same amount, to the cent).
   const refIdx = {};
   csv.forEach((c, j) => { if (c.ref) refIdx[c.ref] = j; });
   tk.forEach((t, i) => {
-    if (last4ById[t.accountId] !== 'FLUZ') return;
-    const refs = t.memo.match(/\b\d{6,10}\b/g) || [];
+    const src = last4ById[t.accountId];
+    if (src !== 'FLUZ' && src !== 'BLUPE') return;
+    const refs = src === 'FLUZ' ? t.memo.match(/\b\d{6,10}\b/g) || []
+      : (t.memo.match(/\bBP \d+\b/g) || []);
     for (let n = 0; n < refs.length; n += 1) {
       const j = refIdx[refs[n]];
       if (j === undefined || csvUsed[j] || Math.abs(csv[j].cents - Math.round(t.outflow * 100)) > 1) continue;
@@ -625,7 +719,7 @@ function buildTransferLedgerRows_(input) {
     else if (dst && CFG.debtTypes.has(dst.type)) bucket = 'BILL_PAY';
     else if (cryptoRx.test(text)) bucket = 'MS_CRYPTO';
     else if (dst && paypalRx.test(dst.name)) {
-      bucket = 'MS';
+      bucket = billRx.test(text) ? 'BILL_PAY' : 'MS';
       const cands = ppOut[dst.id] || [];
       for (let k = 0; k < cands.length; k += 1) {
         const p = txns[cands[k]];
@@ -654,12 +748,14 @@ function buildTransferLedgerRows_(input) {
     }
 
     emit({
-      iso: t.iso, source: last4 === 'FLUZ' ? 'FLUZ' : 'TAEKUS', account: t.account, payee: t.payee,
+      iso: t.iso, source: last4 === 'FLUZ' || last4 === 'BLUPE' ? last4 : 'TAEKUS', account: t.account, payee: t.payee,
       target: dst ? dst.name : t.payee, cashback: c ? c.cashback : 0,
       targetType: dst ? dst.type : '', amount: t.outflow, bucket: bucket, points: points, match: match,
       csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: rowFee,
       group: (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
         (transferCat && (targetGroup_([transferCat], aliases) || transferCat)) ||
+        // Paid through PayPal: the PayPal descriptor names the real target (PAYPAL *AMERICANEXP).
+        (dst && paypalRx.test(dst.name) && c && targetGroup_([c.desc], aliases)) ||
         targetGroup_([dst ? dst.name : '', t.payee, t.splitPayees], aliases) ||
         (useCsv && targetGroup_([c.desc], aliases)) || (dst ? dst.name : t.payee)
     });
@@ -678,6 +774,18 @@ function buildTransferLedgerRows_(input) {
       csvIso: c.iso, id: '', memo: '', note: c.key,
       group: targetGroup_([c.desc, c.merchant], aliases) || c.desc
     });
+  });
+
+  // Blue Penguin monthly rebates actually received (inflows to BLUPE from Blue Penguin): kept as
+  // their own rows so the Summary can compare them with the per-transfer estimate. No profit here,
+  // so they are not counted twice.
+  txns.forEach((t) => {
+    if (last4ById[t.accountId] !== 'BLUPE' || !(t.inflow > 0) || t.dstId) return;
+    if (!rebateRx.test([t.payee, t.category, t.memo].join(' ')) || t.iso < mirrorMin) return;
+    out.push([
+      isoToDate_(t.iso), 'BLUPE', t.account, t.payee, 'Blue Penguin', '', t.inflow, 'BLUPE_REBATE', 0, '', 0, 0,
+      'rebate received', '', '', t.id, t.memo, '', t.iso.slice(0, 7), 'Blue Penguin', 0, t.inflow
+    ]);
   });
 
   out.sort((a, b) => b[0] - a[0]);

@@ -63,6 +63,7 @@ function syncYnabMirror_(opts) {
 
     importTaekusCsvs();
     importFluzCsvs();
+    importBlupeCsvs();
     rebuildTransferLedger();
     if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet)) rebuildTargetStats();
     else { setupTargetDashboard(); arrangeSheets_(); } // first run after a setup that ran out of time
@@ -355,6 +356,19 @@ function applySummaryFormulas_() {
     `label S 'Fluz fee month', count(G) 'charges', sum(G) 'fees'",1),"")`);
   sh.getRange('J4:J').setNumberFormat('$#,##0.00');
   sh.getRange('H3:J3').setFontWeight('bold');
+  // Profit by source, and Blue Penguin's actual monthly rebates next to the per-transfer estimate
+  // (estimate = interchange x Config blupe/interchange_share).
+  const tracked = '{"MS","MS_CRYPTO","BILL_PAY"}';
+  sh.getRange('L3:M3').setValues([['Source', 'Profit']]);
+  [['TAEKUS', 'Taekus (points)'], ['FLUZ', 'Fluz (cashback)'], ['BLUPE', 'Blue Penguin (est. interchange share)']]
+    .forEach((src, i) => {
+      sh.getRange(4 + i, 12).setValue(src[1]);
+      sh.getRange(4 + i, 13).setFormula(`=SUM(SUMIFS('${L}'!K:K,'${L}'!B:B,"${src[0]}",'${L}'!H:H,${tracked}))`);
+    });
+  sh.getRange('L7').setValue('Blue Penguin rebates received');
+  sh.getRange('M7').setFormula(`=SUMIFS('${L}'!V:V,'${L}'!H:H,"BLUPE_REBATE")`);
+  sh.getRange('M4:M7').setNumberFormat('$#,##0.00');
+  sh.getRange('L3:M3').setFontWeight('bold');
 
   sh.getRange('A12:C12').setValues([['Sync Info', 'Value', 'Notes']]);
   sh.getRange('A13').setValue('Last API Sync (epoch ms)');
