@@ -156,6 +156,13 @@ const XFER_CFG = {
       PayPal: '^PP\\b|transfer : PP\\b|paypal'
     }
   },
+  // Older sources with no per-transaction export: the reward deposited into the account (in YNAB) is
+  // spread over that activity month's tracked transfers out of the same accounts. The activity month
+  // comes from the payee ("Upgrade Cashback Rewards for July 2024") or is lagMonths before the deposit.
+  depositSources: [
+    { key: 'UPGRADE', accountRegex: '^UPG[DS]\\b', rewardRegex: 'upgrade cashback rewards for ([a-z]+ \\d{4})', lagMonths: 1 },
+    { key: 'PRIMIS', accountRegex: '^PRMS\\b', rewardRegex: '^cashback rewards', lagMonths: 1 }
+  ],
   triggerFn: 'syncYnabMirrorScheduled',
   triggerMinute: 32
 };
@@ -500,6 +507,13 @@ function buildTransferLedgerRows_(input) {
       last4ById[id] = 'FLUZ';
       taekusByLast4.FLUZ = id;
     }
+  });
+  const depSrc = (XFER_CFG.depositSources || []).map((d) => Object.assign({}, d, {
+    accRx: new RegExp(d.accountRegex, 'i'), rewRx: new RegExp(d.rewardRegex, 'i')
+  }));
+  Object.keys(accounts).forEach((id) => {
+    const d = depSrc.find((s) => s.accRx.test(accounts[id].name));
+    if (d && !last4ById[id]) last4ById[id] = d.key;
   });
   const blupeCfg = cfg.blupe || {};
   const blupeName = String(blupeCfg.account_name || 'BLUPE').trim().toLowerCase();
@@ -864,7 +878,7 @@ function buildTransferLedgerRows_(input) {
     }
 
     emit({
-      iso: t.iso, source: last4 === 'FLUZ' || last4 === 'BLUPE' ? last4 : 'TAEKUS', account: t.account, payee: t.payee,
+      iso: t.iso, source: /^\d{4}$/.test(last4) ? 'TAEKUS' : last4, account: t.account, payee: t.payee,
       target: dst ? dst.name : t.payee, cashback: cashback,
       targetType: dst ? dst.type : '', amount: t.outflow, bucket: bucket, points: points, match: match,
       csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: rowFee,
@@ -919,6 +933,47 @@ function buildTransferLedgerRows_(input) {
       group: targetGroup_([c.desc, c.merchant], aliases) || c.desc
     });
   });
+
+  // Deposit-allocated sources (Upgrade, Primis): monthly reward / that month's tracked transfers.
+  if (depSrc.length) {
+    const monNames = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8,
+      september: 9, october: 10, november: 11, december: 12 };
+    const shiftMonth = (ym, n) => {
+      const p = ym.split('-').map(Number);
+      const d = new Date(Date.UTC(p[0], p[1] - 1 - n, 1));
+      return d.toISOString().slice(0, 7);
+    };
+    const reward = {};
+    txns.forEach((t) => {
+      const key = last4ById[t.accountId];
+      const d = depSrc.find((s) => s.key === key);
+      if (!d || !(t.inflow > 0) || t.dstId) return;
+      const m = [t.payee, t.memo].join(' ').match(d.rewRx);
+      if (!m) return;
+      let month = shiftMonth(t.iso.slice(0, 7), d.lagMonths || 0);
+      if (m[1]) {
+        const mm = m[1].toLowerCase().match(/([a-z]+) (\d{4})/);
+        if (mm && monNames[mm[1]]) month = mm[2] + '-' + ('0' + monNames[mm[1]]).slice(-2);
+      }
+      reward[key + '|' + month] = (reward[key + '|' + month] || 0) + t.inflow;
+    });
+    const base = {};
+    // The reward was earned on all card spend that month (purchases too), so every outflow except
+    // moves between your own accounts counts toward the base; only tracked transfers keep a share.
+    out.forEach((r) => {
+      if (!depSrc.some((s) => s.key === r[1]) || r[7] === 'INTERNAL' || !(r[6] > 0)) return;
+      base[r[1] + '|' + r[18]] = (base[r[1] + '|' + r[18]] || 0) + r[6];
+    });
+    out.forEach((r) => {
+      const k = r[1] + '|' + r[18];
+      if (!base[k] || !reward[k] || XFER_CFG.buckets.indexOf(r[7]) < 0) return;
+      const cb = Math.round(r[6] * reward[k] / base[k] * 100) / 100;
+      r[21] = cb;
+      r[10] = Math.round((cb - (r[20] || 0)) * 100) / 100;
+      r[11] = r[6] ? r[10] / r[6] : 0;
+      if (/^no csv/.test(String(r[12]))) r[12] = 'deposit rate';
+    });
+  }
 
   // Blue Penguin monthly rebates actually received: inflows to BLUPE from Blue Penguin, plus the
   // early ones (Dec 2024 - May 2025) paid into Sequence accounts as "BP REBATE | <id>" or

@@ -360,14 +360,15 @@ function applySummaryFormulas_() {
   // (estimate = interchange x Config blupe/interchange_share).
   const tracked = '{"MS","MS_CRYPTO","BILL_PAY"}';
   sh.getRange('L3:M3').setValues([['Source', 'Profit']]);
-  [['TAEKUS', 'Taekus (points)'], ['FLUZ', 'Fluz (cashback)'], ['BLUPE', 'Blue Penguin (est. interchange share)']]
+  [['TAEKUS', 'Taekus (points)'], ['FLUZ', 'Fluz (cashback)'], ['BLUPE', 'Blue Penguin (est. interchange share)'],
+    ['UPGRADE', 'Upgrade (monthly rewards)'], ['PRIMIS', 'Primis (monthly rewards)']]
     .forEach((src, i) => {
       sh.getRange(4 + i, 12).setValue(src[1]);
       sh.getRange(4 + i, 13).setFormula(`=SUM(SUMIFS('${L}'!K:K,'${L}'!B:B,"${src[0]}",'${L}'!H:H,${tracked}))`);
     });
-  sh.getRange('L7').setValue('Blue Penguin rebates received');
-  sh.getRange('M7').setFormula(`=SUMIFS('${L}'!V:V,'${L}'!H:H,"BLUPE_REBATE")`);
-  sh.getRange('M4:M7').setNumberFormat('$#,##0.00');
+  sh.getRange('L9').setValue('Blue Penguin rebates received');
+  sh.getRange('M9').setFormula(`=SUMIFS('${L}'!V:V,'${L}'!H:H,"BLUPE_REBATE")`);
+  sh.getRange('M4:M9').setNumberFormat('$#,##0.00');
   sh.getRange('L3:M3').setFontWeight('bold');
 
   sh.getRange('A12:C12').setValues([['Sync Info', 'Value', 'Notes']]);
