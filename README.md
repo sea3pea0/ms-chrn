@@ -57,3 +57,12 @@ Fixes: put a YNAB txn id in `Transfer_Overrides` with a bucket and/or points. Pa
 `gas/FluzSync.gs`, `gas/BlupeSync.gs` and `gas/FluzImport.gs` are the Fluz / Blue Penguin CSV -> YNAB
 importers (they write to YNAB, not to the workbook); `installCsvSyncTriggers()` schedules them. The same jobs
 also run as Python cron scripts on pea-docker (`scripts/fluz_sync.py`, `scripts/blupe_sync.py`).
+
+## Taekus -> YNAB reconciliation
+
+The Taekus bank connection in YNAB drops transactions now and then. `scripts/taekus_sync.py` (cron hourly at :37
+on pea-docker, log `logs/taekus_sync.log`) reads the same Drive folder as the tracker, matches every settled
+Taekus row from 2026 on to its YNAB account (same signed amount, date order, -7..+30 days), and for rows since
+2026-09-25 that are at least 3 days old with no YNAB transaction, creates one: cleared, unapproved, memo
+`Taekus <timestamp>`, with payee and category (or transfer account) copied from the last matched row with the
+same description and card. Run it without `--apply` for a dry run.
