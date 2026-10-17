@@ -392,6 +392,44 @@ function buildTransferLedgerRows_(input) {
     });
   });
 
+  // Uncross pairs: two same-amount transfers to different places on nearby days can get each
+  // other's Taekus row (e.g. YNAB "Transfer : OPYD" paired with Taekus "Coinbase" and YNAB
+  // "Coinbase" with Taekus "Onepay*One"). Swap them when that makes both sides agree.
+  const tGroup = tk.map((t) => targetGroup_([
+    t.catGroup.toLowerCase() === transferGroup ? t.category : '',
+    (accounts[t.dstId] || {}).name, t.payee
+  ], aliases));
+  const cGroup = csv.map((c) => targetGroup_([c.desc, c.merchant], aliases));
+  const crossed = {};
+  Object.keys(ynabToCsv).forEach((i) => {
+    const j = ynabToCsv[i];
+    if (tGroup[i] && cGroup[j] && tGroup[i] !== cGroup[j]) {
+      const k = last4ById[tk[i].accountId] + '|' + csv[j].cents;
+      (crossed[k] = crossed[k] || []).push(Number(i));
+    }
+  });
+  const inWindow = (i, j) => {
+    const dd = isoDays_(tk[i].iso) - isoDays_(csv[j].iso);
+    return dd >= -before && dd <= Math.max(after, late);
+  };
+  Object.keys(crossed).forEach((k) => {
+    const list = crossed[k];
+    for (let a = 0; a < list.length; a += 1) {
+      for (let b = a + 1; b < list.length; b += 1) {
+        const ia = list[a];
+        const ib = list[b];
+        const ja = ynabToCsv[ia];
+        const jb = ynabToCsv[ib];
+        if (tGroup[ia] === cGroup[ja] || tGroup[ib] === cGroup[jb]) continue;
+        if (tGroup[ia] !== cGroup[jb] || tGroup[ib] !== cGroup[ja]) continue;
+        if (!inWindow(ia, jb) || !inWindow(ib, ja)) continue;
+        ynabToCsv[ia] = jb;
+        ynabToCsv[ib] = ja;
+        break;
+      }
+    }
+  });
+
   // PayPal outflows that can pair with a Taekus -> PayPal transfer (crypto via PayPal).
   const ppOut = {};
   txns.forEach((t, i) => {
@@ -439,12 +477,15 @@ function buildTransferLedgerRows_(input) {
       else match = 'no csv row';
     }
 
-    const text = [t.payee, t.category, t.memo, dst ? dst.name : '', c ? c.desc + ' ' + c.merchant : ''].join(' ');
     let bucket = 'OTHER';
     let note = '';
     let pairedPayee = '';
     // YNAB category group "Transfer" (e.g. Transfer: Coinbase) names the target directly.
     const transferCat = t.catGroup.toLowerCase() === transferGroup && t.category ? t.category : '';
+    // YNAB says where the money went; the Taekus description only helps when YNAB doesn't
+    // (no transfer account or Transfer category) or the transfer went to PayPal (crypto via PayPal).
+    const useCsv = c && ((!dst && !transferCat) || (dst && paypalRx.test(dst.name)));
+    const text = [t.payee, t.category, t.memo, dst ? dst.name : '', useCsv ? c.desc + ' ' + c.merchant : ''].join(' ');
     if (dst && internalRx.test(dst.name)) bucket = 'INTERNAL';
     else if (dst && CFG.debtTypes.has(dst.type)) bucket = 'BILL_PAY';
     else if (cryptoRx.test(text)) bucket = 'MS_CRYPTO';
@@ -480,7 +521,8 @@ function buildTransferLedgerRows_(input) {
       csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: t.fee,
       group: (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
         (transferCat && (targetGroup_([transferCat], aliases) || transferCat)) ||
-        targetGroup_([dst ? dst.name : '', t.payee, c ? c.desc : ''], aliases) || (dst ? dst.name : t.payee)
+        targetGroup_([dst ? dst.name : '', t.payee], aliases) ||
+        (useCsv && targetGroup_([c.desc], aliases)) || (dst ? dst.name : t.payee)
     });
   });
 
