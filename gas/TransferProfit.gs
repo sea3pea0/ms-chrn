@@ -26,6 +26,11 @@ const XFER_CFG = {
   taekusFolder: 'Taekus Transaction CSVs',
   fluzFolder: 'Fluz Transaction CSVs',
   blupeFolder: 'Blue Penguin Transaction CSVs',
+  // coinbase_one_fees.csv, written daily by scripts/coinbase_fees.py on pea-docker (Coinbase API).
+  coinbaseFeeFolder: 'Coinbase Fees',
+  // Coinbase One paid from a bank account shows up in YNAB as a Coinbase charge in a subscription
+  // category; refunds of it are the matching inflows.
+  coinbaseOneRegex: { payee: 'coinbase', category: 'subscription|coinbase one' },
   sheets: {
     taekusRaw: 'Taekus_Raw',
     fluzRaw: 'Fluz_Raw',
@@ -327,6 +332,20 @@ function taekusRowsFromCsvs_(files) {
   return Object.values(byKey).sort((a, b) => (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0));
 }
 
+// ---------------------------------------------------------------- Coinbase One fees
+
+/** Rows of coinbase_one_fees.csv (Coinbase One paid from Coinbase balances), or [] if not there yet. */
+function coinbaseFeeRows_() {
+  try {
+    const files = driveCsvs_(XFER_CFG.coinbaseFeeFolder);
+    const f = files.filter((x) => /coinbase_one_fees/i.test(x.name)).pop();
+    return f ? readCsvText_(f.text) : [];
+  } catch (e) {
+    console.warn('Coinbase fees: ' + e.message);
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------- Blue Penguin CSV import
 
 function importBlupeCsvs() {
@@ -444,6 +463,7 @@ function rebuildTransferLedger() {
     fluz: ss.getSheetByName(XFER_CFG.sheets.fluzRaw).getDataRange().getValues(),
     blupe: ss.getSheetByName(XFER_CFG.sheets.blupeRaw).getDataRange().getValues(),
     blupeStatements: ss.getSheetByName(XFER_CFG.sheets.blupeStatements).getDataRange().getValues(),
+    coinbaseFees: coinbaseFeeRows_(),
     overrides: ss.getSheetByName(XFER_CFG.sheets.overrides).getDataRange().getValues(),
     cfg: xferConfig_(),
     tz: ss.getSpreadsheetTimeZone()
@@ -934,6 +954,32 @@ function buildTransferLedgerRows_(input) {
     });
   });
 
+  // Coinbase One subscription: a cost of crypto MS that can't be tied to a single buy. Kept as
+  // CRYPTO_FEE rows (profit = -fee) so the Summary and MS-Crypto sheet can show profit after it.
+  // From Coinbase balances (API export) plus bank-paid charges and refunds in YNAB.
+  const cbPayRx = new RegExp(XFER_CFG.coinbaseOneRegex.payee, 'i');
+  const cbCatRx = new RegExp(XFER_CFG.coinbaseOneRegex.category, 'i');
+  const feeRow = (iso, account, payee, amount, id, memo, note) => {
+    out.push([
+      isoToDate_(iso), 'COINBASE', account, payee, 'Coinbase One', '', amount, 'CRYPTO_FEE', 0, '',
+      -Math.round(amount * 100) / 100, 0, 'subscription fee', '', '', id, memo, note, iso.slice(0, 7),
+      'Coinbase One', Math.round(amount * 100) / 100, 0
+    ]);
+  };
+  txns.forEach((t) => {
+    if (t.dstId || t.iso < mirrorMin || !cbPayRx.test(t.payee) || !cbCatRx.test(t.category)) return;
+    if (t.outflow > 0) feeRow(t.iso, t.account, t.payee, t.outflow, t.id, t.memo, 'paid from bank');
+    else if (t.inflow > 0) feeRow(t.iso, t.account, t.payee, -t.inflow, t.id, t.memo, 'refund');
+  });
+  (input.coinbaseFees || []).forEach((r) => {
+    const iso = String(r.date || '').slice(0, 10);
+    const usd = toNumber_(r.amount_usd);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso) || !usd) return;
+    // subscription: negative amount (paid); subscription_rebate: positive (refunded).
+    feeRow(iso, 'Coinbase ' + (r.account || ''), r.type === 'subscription' ? 'Coinbase One' : 'Coinbase One rebate',
+      -usd, String(r.id || ''), '', r.type === 'subscription' ? 'paid in ' + (r.currency || 'USDC') : 'rebate');
+  });
+
   // Deposit-allocated sources (Upgrade, Primis): monthly reward / that month's tracked transfers.
   if (depSrc.length) {
     const monNames = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8,
@@ -1048,6 +1094,12 @@ function setTransferView_(sheetName, bucket) {
     '=IFERROR(F2/B2,0)',
     `=SUMIFS('${L}'!K:K,'${L}'!H:H,"${bucket}",'${L}'!A:A,">="&(TODAY()-30))`
   ]]);
+  if (bucket === 'MS_CRYPTO') {
+    sheet.getRange('I1:J1').setValues([['Coinbase One fees', 'Profit after Coinbase One']]);
+    sheet.getRange('I2:J2').setFormulas([[`=SUMIFS('${L}'!U:U,'${L}'!H:H,"CRYPTO_FEE")`, '=F2-I2']]);
+    sheet.getRange('I2:J2').setNumberFormat('$#,##0.00');
+    sheet.getRange('I1:J1').setFontWeight('bold');
+  }
   sheet.getRange('A1:H1').setFontWeight('bold');
   sheet.getRange('B2').setNumberFormat('$#,##0.00');
   sheet.getRange('C2').setNumberFormat('#,##0');
