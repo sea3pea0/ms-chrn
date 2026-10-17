@@ -43,6 +43,11 @@ const XFER_CFG = {
   // Every statement works out to ~69.7% of net interchange, hence interchange_share 0.697.
   blupeStatementHeaders: ['processing_month', 'customer_id', 'settlement', 'interchange', 'rebate', 'payout'],
   blupeStatementSeed: [
+    // No statements for Jun - Aug 2024: rebate deposited into BLUPE two months later divided by
+    // that month's BLUPE transfers in YNAB.
+    ['2024-06', 'from deposit', 14016.31, '', 203.61, '2024-08-15'],
+    ['2024-07', 'from deposit', 83183.45, '', 1370.28, '2024-09-17'],
+    ['2024-08', 'from deposit', 340830.28, '', 6829.76, '2024-10-17'],
     ['2024-09', '126795', 433592.57, 12707.80, 8865.46, '2024-11-15'],
     ['2024-10', '126795', 273984.53, 8053.14, 5617.25, '2024-12-15'],
     ['2024-11', '126795', 162846.59, 4673.60, 3258.00, '2025-01-15'],
