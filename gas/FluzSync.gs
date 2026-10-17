@@ -59,6 +59,9 @@ const FLUZ_MONTHS_ = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, A
 
 /** "Mon Sep 29 2026 ..." -> "2026-09-29" (or null). */
 function fluzDate_(s) {
+  // Newer exports (mid-Oct 2026 on) use ISO UTC timestamps: 2026-10-16T16:52:53.446Z
+  const iso8601 = /^\s*(\d{4}-\d{2}-\d{2})T/.exec(s || '');
+  if (iso8601) return isoValid_(iso8601[1]) ? iso8601[1] : null;
   const m = /[A-Z][a-z]{2} ([A-Z][a-z]{2}) (\d{2}) (\d{4})/.exec(s || '');
   if (!m || !FLUZ_MONTHS_[m[1]]) return null;
   const iso = m[3] + '-' + ('0' + FLUZ_MONTHS_[m[1]]).slice(-2) + '-' + m[2];

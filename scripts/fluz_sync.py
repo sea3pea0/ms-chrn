@@ -66,8 +66,13 @@ REWARD_TYPES = {"Referral Royalties", "Rewards Bonus"}
 # ---------------------------------------------------------------- helpers
 
 def fluz_date(s: str):
+    """'Created At' is 'Mon Oct 12 2026 20:21:44 GMT+0000 (...)' in older exports and
+    '2026-10-16T16:52:53.446Z' since mid-Oct 2026; both are UTC."""
     m = re.search(r"[A-Z][a-z]{2} ([A-Z][a-z]{2} \d{2} \d{4})", s or "")
-    return dt.datetime.strptime(m.group(1), "%b %d %Y").date() if m else None
+    if m:
+        return dt.datetime.strptime(m.group(1), "%b %d %Y").date()
+    m = re.match(r"\s*(\d{4}-\d{2}-\d{2})T", s or "")
+    return dt.date.fromisoformat(m.group(1)) if m else None
 
 
 def clean(s) -> str:
