@@ -106,7 +106,15 @@ const XFER_CFG = {
       account_name: 'BLUPE',
       interchange_share: '0.697',
       rebate_payee_regex: 'blue penguin',
-      other_account_rebate_payee_regex: '^BP (REBATE|PAYOUT)\\b'
+      other_account_rebate_payee_regex: '^BP (REBATE|PAYOUT)\\b',
+      // Blue Penguin -> Robinhood: crypto until mid-2025, since then paying the Robinhood credit card.
+      // A transfer counts as Bill Pay when a card payment follows within rh_pay_days (the payment is
+      // the transfer plus the card's 3% cash back, so it can be a little bigger).
+      rh_card_account_regex: '^RHCC\\b',
+      rh_pay_days: '10',
+      rh_pay_tolerance: '0.05',
+      // Last Blue Penguin -> Robinhood crypto buy; every later one is Robinhood card Bill Pay.
+      rh_crypto_end: '2025-06-10'
     },
     transfer_rules: {
       crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin',
@@ -720,6 +728,37 @@ function buildTransferLedgerRows_(input) {
   });
   const ppUsed = {};
 
+  // Blue Penguin -> Robinhood transfers that fund a Robinhood credit card payment are Bill Pay.
+  // Each card payment takes the unused transfers dated up to rh_pay_days before it (or 2 after),
+  // oldest first, while their total stays within the payment (+ tolerance).
+  const rhBill = {};
+  const bpc = cfg.blupe || {};
+  const rhCardRx = new RegExp(bpc.rh_card_account_regex || '^RHCC\\b', 'i');
+  const rhDays = Number(bpc.rh_pay_days) || 10;
+  const rhTol = Number(bpc.rh_pay_tolerance) || 0.05;
+  const rhCand = [];
+  tk.forEach((t, i) => {
+    if (last4ById[t.accountId] !== 'BLUPE') return;
+    const cat = t.catGroup.toLowerCase() === transferGroup ? t.category : '';
+    if (targetGroup_([cat, (accounts[t.dstId] || {}).name, t.payee], aliases) === 'Robinhood') rhCand.push(i);
+  });
+  const rhCryptoEnd = String(bpc.rh_crypto_end || '').trim();
+  const isRh = {};
+  rhCand.forEach((i) => { isRh[i] = true; });
+  rhCand.sort((a, b) => (tk[a].iso < tk[b].iso ? -1 : tk[a].iso > tk[b].iso ? 1 : 0));
+  txns.filter((t) => rhCardRx.test(t.account) && t.inflow > 0 && /payment/i.test(t.payee) && !t.dstId)
+    .sort((a, b) => (a.iso < b.iso ? -1 : a.iso > b.iso ? 1 : 0))
+    .forEach((p) => {
+      let sum = 0;
+      rhCand.forEach((i) => {
+        if (rhBill[i]) return;
+        const dd = isoDays_(p.iso) - isoDays_(tk[i].iso);
+        if (dd < -2 || dd > rhDays || sum + tk[i].outflow > p.inflow * (1 + rhTol)) return;
+        sum += tk[i].outflow;
+        rhBill[i] = p;
+      });
+    });
+
   const overrides = {};
   const oh = mapHeaderIndexes_(input.overrides[0] || []);
   input.overrides.slice(1).forEach((r) => {
@@ -775,6 +814,12 @@ function buildTransferLedgerRows_(input) {
       bucket = last4 === 'FLUZ' ? 'FLUZ_FEE' : 'OTHER';
     }
     else if (dst && CFG.debtTypes.has(dst.type)) bucket = 'BILL_PAY';
+    else if (rhBill[i] || (isRh[i] && rhCryptoEnd && t.iso > rhCryptoEnd)) {
+      bucket = 'BILL_PAY';
+      pairedPayee = 'Robinhood Credit Card';
+      note = rhBill[i] ? 'pays ' + rhBill[i].account + ' ' + rhBill[i].inflow.toFixed(2) + ' on ' + rhBill[i].iso
+        : 'Robinhood card payment (after ' + rhCryptoEnd + ')';
+    }
     else if (cryptoRx.test(text)) bucket = 'MS_CRYPTO';
     else if (dst && paypalRx.test(dst.name)) {
       bucket = billRx.test(text) ? 'BILL_PAY' : 'MS';
@@ -818,7 +863,8 @@ function buildTransferLedgerRows_(input) {
       target: dst ? dst.name : t.payee, cashback: cashback,
       targetType: dst ? dst.type : '', amount: t.outflow, bucket: bucket, points: points, match: match,
       csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: rowFee,
-      group: (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
+      group: (pairedPayee === 'Robinhood Credit Card' && pairedPayee) ||
+        (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
         (transferCat && (targetGroup_([transferCat], aliases) || transferCat)) ||
         // Paid through PayPal: the PayPal descriptor names the real target (PAYPAL *AMERICANEXP).
         (dst && paypalRx.test(dst.name) && c && targetGroup_([c.desc], aliases)) ||
