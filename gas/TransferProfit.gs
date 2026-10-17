@@ -323,6 +323,9 @@ function buildTransferLedgerRows_(input) {
       memo: String(r[mh.Memo] || ''),
       outflow: toNumber_(r[mh.Outflow]),
       fee: mh.split_fee === undefined ? 0 : toNumber_(r[mh.split_fee]),
+      // Payees of a split's other lines, e.g. the "Western Union" fee line next to a transfer
+      // to SOFD: Western Union is the real target there.
+      splitPayees: mh.split_payees === undefined ? '' : String(r[mh.split_payees] || ''),
       dstId: String(r[mh.transfer_account_id] || '').trim()
     });
   });
@@ -397,7 +400,7 @@ function buildTransferLedgerRows_(input) {
   // "Coinbase" with Taekus "Onepay*One"). Swap them when that makes both sides agree.
   const tGroup = tk.map((t) => targetGroup_([
     t.catGroup.toLowerCase() === transferGroup ? t.category : '',
-    (accounts[t.dstId] || {}).name, t.payee
+    (accounts[t.dstId] || {}).name, t.payee, t.splitPayees
   ], aliases));
   const cGroup = csv.map((c) => targetGroup_([c.desc, c.merchant], aliases));
   const crossed = {};
@@ -521,7 +524,7 @@ function buildTransferLedgerRows_(input) {
       csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: t.fee,
       group: (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
         (transferCat && (targetGroup_([transferCat], aliases) || transferCat)) ||
-        targetGroup_([dst ? dst.name : '', t.payee], aliases) ||
+        targetGroup_([dst ? dst.name : '', t.payee, t.splitPayees], aliases) ||
         (useCsv && targetGroup_([c.desc], aliases)) || (dst ? dst.name : t.payee)
     });
   });

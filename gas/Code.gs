@@ -21,7 +21,7 @@ const CFG = {
     'Account', 'Flag', 'Date', 'Payee', 'Category Group/Category', 'Category Group', 'Category', 'Memo',
     'Outflow', 'Inflow', 'Cleared',
     'txn_id', 'account_id', 'transfer_account_id', 'deleted', 'approved', 'flag_color_raw', 'import_id',
-    'last_modified_on', 'source', 'split_fee'
+    'last_modified_on', 'source', 'split_fee', 'split_payees'
   ],
   accountHeaders: ['account_id', 'account_name', 'account_type', 'on_budget', 'closed', 'note'],
   debtTypes: new Set(['creditCard', 'lineOfCredit', 'otherDebt', 'mortgage'])
@@ -82,13 +82,17 @@ function pullYnabMirror_(opts) {
   const accountMap = fetchYnabAccounts_(token, budgetId);
   writeAccounts_(accountMap);
 
-  const txData = fetchYnabTransactions_(token, budgetId, opts.force ? 0 : lastKnowledge);
-  const catGroups = fetchYnabCategoryGroups_(token, budgetId);
   // Keep the header in step with CFG.mirrorHeaders (rows are written by position, and the
-  // ledger reads columns by header name, e.g. split_fee).
+  // ledger reads columns by header name). A new column means older rows lack it, so refetch all.
   const mirrorSheet = SpreadsheetApp.getActive().getSheetByName(CFG.sheets.ynabMirror);
+  const header = mirrorSheet.getRange(1, 1, 1, CFG.mirrorHeaders.length).getValues()[0];
+  const stale = CFG.mirrorHeaders.some((h, i) => String(header[i]) !== h);
   mirrorSheet.getRange(1, 1, 1, CFG.mirrorHeaders.length).setValues([CFG.mirrorHeaders]);
-  upsertMirrorTransactions_(txData.transactions || [], accountMap, opts.force || !lastKnowledge, catGroups);
+  const full = opts.force || !lastKnowledge || stale;
+
+  const txData = fetchYnabTransactions_(token, budgetId, full ? 0 : lastKnowledge);
+  const catGroups = fetchYnabCategoryGroups_(token, budgetId);
+  upsertMirrorTransactions_(txData.transactions || [], accountMap, full, catGroups);
 
   props.setProperty('YNAB_SERVER_KNOWLEDGE', String(txData.server_knowledge || 0));
   props.setProperty('YNAB_LAST_SYNC_EPOCH_MS', String(Date.now()));
@@ -238,6 +242,7 @@ function mapTxnToMirrorRow_(t, accountMap, catGroups) {
   const groups = catGroups || {};
   const subs = (t.subtransactions || []).filter((s) => !s.deleted);
   let splitFee = 0;
+  let splitPayees = '';
   let transferId = t.transfer_account_id || '';
   let catId = t.category_id;
   let cName = t.category_name || '';
@@ -246,6 +251,8 @@ function mapTxnToMirrorRow_(t, accountMap, catGroups) {
       const text = [s.category_name, groups[s.category_id], s.payee_name].join(' ');
       if (/\bfees?\b/i.test(text) && s.amount < 0) splitFee += Math.abs(s.amount) / 1000;
     });
+    splitPayees = Array.from(new Set(subs.map((s) => s.payee_name || '')
+      .filter((p) => p && !/^Transfer : /.test(p)))).join(' | ');
     const big = subs.slice().sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
     if (!transferId) transferId = big.transfer_account_id || '';
     catId = big.category_id;
@@ -281,7 +288,8 @@ function mapTxnToMirrorRow_(t, accountMap, catGroups) {
     t.import_id || '',
     t.date || '',
     'ynab_api',
-    Math.round(splitFee * 100) / 100
+    Math.round(splitFee * 100) / 100,
+    splitPayees
   ];
 }
 

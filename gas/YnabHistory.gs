@@ -137,6 +137,9 @@ function historyToMirrorRows_(history, accounts, beforeIso, tz) {
     const main = t.main;
     const tm = main.payee.match(/^Transfer : (.+)$/);
     const memo = main.memo.replace(/^Split \(\d+\/\d+\)\s*/, '');
+    const splitPayees = t.split
+      ? Array.from(new Set(t.parts.map((p) => p.payee).filter((p) => p && !/^Transfer : /.test(p)))).join(' | ')
+      : '';
     const base = ['csv', main.account, main.iso, Math.round(net * 100), main.payee].join('|');
     seen[base] = (seen[base] || 0) + 1;
     return [
@@ -144,7 +147,7 @@ function historyToMirrorRows_(history, accounts, beforeIso, tz) {
       main.cgc, main.group, main.category, memo,
       net < 0 ? Math.round(-net * 100) / 100 : 0, net > 0 ? Math.round(net * 100) / 100 : 0, main.cleared,
       base + '|' + seen[base], idByName[main.account] || '', tm ? idByName[tm[1].trim()] || '' : '',
-      false, true, main.flag, '', main.iso, 'csv_history', Math.round(fee * 100) / 100
+      false, true, main.flag, '', main.iso, 'csv_history', Math.round(fee * 100) / 100, splitPayees
     ];
   });
 }
