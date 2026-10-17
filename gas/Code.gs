@@ -84,6 +84,10 @@ function pullYnabMirror_(opts) {
 
   const txData = fetchYnabTransactions_(token, budgetId, opts.force ? 0 : lastKnowledge);
   const catGroups = fetchYnabCategoryGroups_(token, budgetId);
+  // Keep the header in step with CFG.mirrorHeaders (rows are written by position, and the
+  // ledger reads columns by header name, e.g. split_fee).
+  const mirrorSheet = SpreadsheetApp.getActive().getSheetByName(CFG.sheets.ynabMirror);
+  mirrorSheet.getRange(1, 1, 1, CFG.mirrorHeaders.length).setValues([CFG.mirrorHeaders]);
   upsertMirrorTransactions_(txData.transactions || [], accountMap, opts.force || !lastKnowledge, catGroups);
 
   props.setProperty('YNAB_SERVER_KNOWLEDGE', String(txData.server_knowledge || 0));
