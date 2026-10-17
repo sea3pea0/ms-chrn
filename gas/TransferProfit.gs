@@ -70,7 +70,8 @@ const XFER_CFG = {
     blupe: {
       account_name: 'BLUPE',
       interchange_share: '0.6841',
-      rebate_payee_regex: 'blue penguin'
+      rebate_payee_regex: 'blue penguin',
+      other_account_rebate_payee_regex: '^BP (REBATE|PAYOUT)\\b'
     },
     transfer_rules: {
       crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin',
@@ -451,6 +452,7 @@ function buildTransferLedgerRows_(input) {
   const blupeName = String(blupeCfg.account_name || 'BLUPE').trim().toLowerCase();
   const blupeShare = Number(blupeCfg.interchange_share) || 0;
   const rebateRx = new RegExp(blupeCfg.rebate_payee_regex || 'blue penguin', 'i');
+  const otherRebateRx = new RegExp(blupeCfg.other_account_rebate_payee_regex || '^BP (REBATE|PAYOUT)\\b', 'i');
   Object.keys(accounts).forEach((id) => {
     if (accounts[id].name.trim().toLowerCase() === blupeName) {
       last4ById[id] = 'BLUPE';
@@ -776,12 +778,14 @@ function buildTransferLedgerRows_(input) {
     });
   });
 
-  // Blue Penguin monthly rebates actually received (inflows to BLUPE from Blue Penguin): kept as
-  // their own rows so the Summary can compare them with the per-transfer estimate. No profit here,
-  // so they are not counted twice.
+  // Blue Penguin monthly rebates actually received: inflows to BLUPE from Blue Penguin, plus the
+  // early ones (Dec 2024 - May 2025) paid into Sequence accounts as "BP REBATE | <id>" or
+  // "BP PAYOUT | <id>". Kept as their own rows so the Summary can compare them with the
+  // per-transfer estimate. No profit here, so they are not counted twice.
   txns.forEach((t) => {
-    if (last4ById[t.accountId] !== 'BLUPE' || !(t.inflow > 0) || t.dstId) return;
-    if (!rebateRx.test([t.payee, t.category, t.memo].join(' ')) || t.iso < mirrorMin) return;
+    if (!(t.inflow > 0) || t.dstId || t.iso < mirrorMin) return;
+    const inBlupe = last4ById[t.accountId] === 'BLUPE' && rebateRx.test([t.payee, t.category, t.memo].join(' '));
+    if (!inBlupe && !otherRebateRx.test(t.payee)) return;
     out.push([
       isoToDate_(t.iso), 'BLUPE', t.account, t.payee, 'Blue Penguin', '', t.inflow, 'BLUPE_REBATE', 0, '', 0, 0,
       'rebate received', '', '', t.id, t.memo, '', t.iso.slice(0, 7), 'Blue Penguin', 0, t.inflow
