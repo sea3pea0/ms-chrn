@@ -2,8 +2,10 @@
  * Coinbase One subscription payments made from Coinbase balances (mostly USDC), which YNAB never
  * sees, pulled from the Coinbase App API (v2) with a CDP API key.
  *
- * Setup: Apps Script > Project Settings > Script properties > add CDP_API_KEY with the whole
- * contents of the CDP key file ({"name": "organizations/...", "privateKey": "..."}, Ed25519).
+ * Setup: Apps Script > Project Settings > Script properties > add CDP_API_KEY (P1) and
+ * CDP_API_KEY_P2 (P2) with the whole contents of each CDP key file
+ * ({"name": "organizations/...", "privateKey": "..."}, Ed25519). Any CDP_API_KEY_<suffix> works.
+ * Also writes Coinbase_Balances (each wallet's current USD value) for the MS-Crypto balance.
  *
  * refreshCoinbaseFees() rewrites the Coinbase_Fees sheet with every `subscription` (fee) and
  * `subscription_rebate` (fee refund) transaction; the YNAB sync calls it about once a day.
@@ -13,6 +15,7 @@
 const CB_CFG = {
   host: 'api.coinbase.com',
   sheet: 'Coinbase_Fees',
+  balanceSheet: 'Coinbase_Balances',
   headers: ['date', 'type', 'amount_usd', 'native_currency', 'amount', 'currency', 'account', 'id'],
   types: { subscription: true, subscription_rebate: true },
   refreshHours: 20,
@@ -21,25 +24,46 @@ const CB_CFG = {
 
 /** Refresh if the last pull is older than CB_CFG.refreshHours (or force). No key = no-op. */
 function refreshCoinbaseFees(force) {
-  const raw = PropertiesService.getScriptProperties().getProperty('CDP_API_KEY');
-  if (!raw) { console.log('Coinbase fees: no CDP_API_KEY script property; skipped.'); return 0; }
+  const sp = PropertiesService.getScriptProperties().getProperties();
+  const keys = Object.keys(sp).filter((k) => /^CDP_API_KEY(_.+)?$/.test(k)).sort()
+    .map((k) => ({ label: k === 'CDP_API_KEY' ? 'P1' : k.replace('CDP_API_KEY_', ''), key: JSON.parse(sp[k]) }));
+  if (!keys.length) { console.log('Coinbase fees: no CDP_API_KEY script property; skipped.'); return 0; }
   const props = PropertiesService.getDocumentProperties();
   const last = Number(props.getProperty(CB_CFG.propKey) || 0);
   const ss = SpreadsheetApp.getActive();
   const sh = ensureSheet_(ss, CB_CFG.sheet);
-  if (force !== true && sh.getLastRow() > 1 && Date.now() - last < CB_CFG.refreshHours * 3600000) return 0;
+  // A new key (e.g. P2 added) triggers a pull right away instead of waiting for the daily one.
+  const sig = keys.map((k) => k.label).join(',');
+  if (force !== true && sh.getLastRow() > 1 && props.getProperty('COINBASE_KEYS') === sig &&
+    Date.now() - last < CB_CFG.refreshHours * 3600000) return 0;
 
-  const key = JSON.parse(raw);
   const rows = [];
-  cbAll_(key, '/v2/accounts?limit=100').forEach((a) => {
-    cbAll_(key, '/v2/accounts/' + a.id + '/transactions?limit=100').forEach((t) => {
-      if (!CB_CFG.types[t.type] || (t.status && t.status !== 'completed')) return;
-      rows.push([
-        String(t.created_at).slice(0, 10), t.type, Number(t.native_amount.amount), t.native_amount.currency,
-        Number(t.amount.amount), t.amount.currency, a.name || '', t.id
-      ]);
+  const balances = [];
+  const rates = cbUsdRates_();
+  keys.forEach((k) => {
+    cbAll_(k.key, '/v2/accounts?limit=100').forEach((a) => {
+      const bal = Number(a.balance && a.balance.amount || 0);
+      const cur = a.balance && a.balance.currency || (a.currency && a.currency.code) || '';
+      if (bal > 0) {
+        const rate = cur === 'USD' ? 1 : Number(rates[cur] || 0);
+        balances.push([k.label, a.name || cur, cur, bal, rate ? Math.round(bal / rate * 100) / 100 : '']);
+      }
+      cbAll_(k.key, '/v2/accounts/' + a.id + '/transactions?limit=100').forEach((t) => {
+        if (!CB_CFG.types[t.type] || (t.status && t.status !== 'completed')) return;
+        rows.push([
+          String(t.created_at).slice(0, 10), t.type, Number(t.native_amount.amount), t.native_amount.currency,
+          Number(t.amount.amount), t.amount.currency, k.label + ' ' + (a.name || ''), t.id
+        ]);
+      });
     });
   });
+  const bs = ensureSheet_(ss, CB_CFG.balanceSheet);
+  bs.clearContents();
+  bs.getRange(1, 1, 1, 6).setValues([['coinbase', 'wallet', 'currency', 'balance', 'usd_value', 'as_of']]);
+  if (balances.length) {
+    bs.getRange(2, 1, balances.length, 6).setValues(balances.map((b) => b.concat([new Date()])));
+    bs.getRange(2, 5, balances.length, 1).setNumberFormat('$#,##0.00');
+  }
   rows.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
 
   const w = CB_CFG.headers.length;
@@ -51,8 +75,15 @@ function refreshCoinbaseFees(force) {
     sh.getRange(2, 1, rows.length, w).setValues(rows);
   }
   props.setProperty(CB_CFG.propKey, String(Date.now()));
+  props.setProperty('COINBASE_KEYS', sig);
   console.log('Coinbase_Fees: ' + rows.length + ' rows');
   return rows.length;
+}
+
+/** Units of each currency per 1 USD (public endpoint, no key). */
+function cbUsdRates_() {
+  const r = UrlFetchApp.fetch('https://' + CB_CFG.host + '/v2/exchange-rates?currency=USD', { muteHttpExceptions: true });
+  return r.getResponseCode() < 300 ? (JSON.parse(r.getContentText()).data || {}).rates || {} : {};
 }
 
 /** GET every page of a Coinbase v2 list endpoint. */

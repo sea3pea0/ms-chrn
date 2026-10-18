@@ -23,7 +23,7 @@ const CFG = {
     'txn_id', 'account_id', 'transfer_account_id', 'deleted', 'approved', 'flag_color_raw', 'import_id',
     'last_modified_on', 'source', 'split_fee', 'split_payees'
   ],
-  accountHeaders: ['account_id', 'account_name', 'account_type', 'on_budget', 'closed', 'note'],
+  accountHeaders: ['account_id', 'account_name', 'account_type', 'on_budget', 'closed', 'note', 'balance'],
   debtTypes: new Set(['creditCard', 'lineOfCredit', 'otherDebt', 'mortgage'])
 };
 
@@ -146,7 +146,8 @@ function fetchYnabAccounts_(token, budgetId) {
       type: a.type,
       on_budget: a.on_budget,
       closed: a.closed,
-      note: a.note || ''
+      note: a.note || '',
+      balance: Number(a.balance || 0) / 1000
     };
   });
   return map;
@@ -322,9 +323,10 @@ function mapTxnToMirrorRow_(t, accountMap, catGroups) {
 function writeAccounts_(accountMap) {
   const rows = Object.values(accountMap)
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
-    .map((a) => [a.id, a.name, a.type, a.on_budget, a.closed, a.note]);
+    .map((a) => [a.id, a.name, a.type, a.on_budget, a.closed, a.note, a.balance]);
 
   const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheets.ynabAccounts);
+  sh.getRange(1, 1, 1, CFG.accountHeaders.length).setValues([CFG.accountHeaders]);
   resetDataBody_(sh, CFG.accountHeaders.length);
   if (rows.length) {
     sh.getRange(2, 1, rows.length, CFG.accountHeaders.length).setValues(rows);

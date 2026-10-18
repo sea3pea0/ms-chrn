@@ -136,6 +136,7 @@ const XFER_CFG = {
       Coinbase: 'coinbase',
       Uphold: 'uphold',
       Topper: 'topper',
+      'Robinhood Credit Card': 'robinhood credit card|^RHCC\\b|transfer : RHCC\\b',
       Robinhood: 'robinhood',
       LemFi: 'lemfi',
       MoneyLion: 'moneylion|money lion|roarmoney|ml spend|^MOLI\\b|transfer : MOLI\\b',
@@ -196,7 +197,7 @@ function arrangeSheets_() {
   const order = [
     CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet, BONUS_CFG.sheet,
     XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw,
-    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet,
+    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet, CB_CFG.balanceSheet,
     CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
   ];
   let pos = 1;
