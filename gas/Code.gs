@@ -211,7 +211,7 @@ function upsertMirrorTransactions_(transactions, accountMap, replaceAll, catGrou
   });
 
   // Many changes (e.g. a bulk recategorize): rewrite the body once instead of row by row.
-  if (updates.length + deletes.length > 50) {
+  if (updates.length + deletes.length > 150) {
     const w = CFG.mirrorHeaders.length;
     const byRow = {};
     updates.forEach((u) => { byRow[u.row] = u.values; });

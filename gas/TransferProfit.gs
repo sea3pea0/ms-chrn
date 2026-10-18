@@ -178,9 +178,9 @@ function setupTransferProfit() {
   // Full refresh so every mirror row has category groups and split fees.
   csvSyncLocked_('setupTransferProfit', () => pullYnabMirror_({ force: true, calledBy: 'setup' }));
   importYnabHistory(true);
-  importTaekusCsvs();
-  importFluzCsvs();
-  importBlupeCsvs();
+  importTaekusCsvs(true);
+  importFluzCsvs(true);
+  importBlupeCsvs(true);
   refreshCoinbaseFees(true);
   rebuildTransferLedger();
   applyViewFormulas_();
@@ -270,8 +270,40 @@ function xferConfig_() {
 
 // ---------------------------------------------------------------- Taekus CSV import
 
-function importTaekusCsvs() {
+
+/**
+ * True when the folder's CSVs (names + last-updated) are the same as at the last import and the
+ * raw sheet still has rows, so the hourly sync can skip re-reading and rewriting it.
+ */
+function csvFolderUnchanged_(folderName, sheetName, force) {
+  const it = DriveApp.getFoldersByName(folderName);
+  if (!it.hasNext()) return false;
+  const files = it.next().getFiles();
+  const parts = [];
+  while (files.hasNext()) {
+    const f = files.next();
+    if (!f.isTrashed()) parts.push(f.getId() + '@' + f.getLastUpdated().getTime());
+  }
+  const stamp = parts.sort().join(',');
+  const key = 'CSV_STAMP_' + sheetName;
+  const props = PropertiesService.getDocumentProperties();
+  const sh = SpreadsheetApp.getActive().getSheetByName(sheetName);
+  if (force !== true && props.getProperty(key) === stamp && sh && sh.getLastRow() > 1) return true;
+  csvFolderStamps_[key] = stamp;
+  return false;
+}
+
+/** Record the stamp once the import has written the sheet. */
+function markCsvFolderImported_(sheetName) {
+  const key = 'CSV_STAMP_' + sheetName;
+  if (csvFolderStamps_[key]) PropertiesService.getDocumentProperties().setProperty(key, csvFolderStamps_[key]);
+}
+
+const csvFolderStamps_ = {};
+
+function importTaekusCsvs(force) {
   ensureTransferSheets_();
+  if (csvFolderUnchanged_(XFER_CFG.taekusFolder, XFER_CFG.sheets.taekusRaw, force)) return 0;
   const rows = taekusRowsFromCsvs_(driveCsvs_(XFER_CFG.taekusFolder));
   const sh = SpreadsheetApp.getActive().getSheetByName(XFER_CFG.sheets.taekusRaw);
   sh.clearContents();
@@ -282,6 +314,7 @@ function importTaekusCsvs() {
     rng.setNumberFormat('@');
     rng.setValues(rows);
   }
+  markCsvFolderImported_(XFER_CFG.sheets.taekusRaw);
   console.log('Taekus_Raw: ' + rows.length + ' rows');
   return rows.length;
 }
@@ -348,8 +381,9 @@ function coinbaseFeeRows_() {
 
 // ---------------------------------------------------------------- Blue Penguin CSV import
 
-function importBlupeCsvs() {
+function importBlupeCsvs(force) {
   ensureTransferSheets_();
+  if (csvFolderUnchanged_(XFER_CFG.blupeFolder, XFER_CFG.sheets.blupeRaw, force)) return 0;
   const rows = blupeRowsFromCsvs_(driveCsvs_(XFER_CFG.blupeFolder));
   const sh = SpreadsheetApp.getActive().getSheetByName(XFER_CFG.sheets.blupeRaw);
   const w = XFER_CFG.blupeRawHeaders.length;
@@ -361,6 +395,7 @@ function importBlupeCsvs() {
     rng.setNumberFormat('@');
     rng.setValues(rows);
   }
+  markCsvFolderImported_(XFER_CFG.sheets.blupeRaw);
   console.log('BLUPE_Raw: ' + rows.length + ' rows');
   return rows.length;
 }
@@ -389,8 +424,9 @@ function blupeRowsFromCsvs_(files) {
 
 // ---------------------------------------------------------------- Fluz CSV import
 
-function importFluzCsvs() {
+function importFluzCsvs(force) {
   ensureTransferSheets_();
+  if (csvFolderUnchanged_(XFER_CFG.fluzFolder, XFER_CFG.sheets.fluzRaw, force)) return 0;
   const rows = fluzRowsFromCsvs_(driveCsvs_(XFER_CFG.fluzFolder));
   const sh = SpreadsheetApp.getActive().getSheetByName(XFER_CFG.sheets.fluzRaw);
   const w = XFER_CFG.fluzRawHeaders.length;
@@ -402,6 +438,7 @@ function importFluzCsvs() {
     rng.setNumberFormat('@');
     rng.setValues(rows);
   }
+  markCsvFolderImported_(XFER_CFG.sheets.fluzRaw);
   console.log('Fluz_Raw: ' + rows.length + ' rows');
   return rows.length;
 }
