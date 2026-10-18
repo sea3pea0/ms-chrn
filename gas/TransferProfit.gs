@@ -186,6 +186,7 @@ function setupTransferProfit() {
   applyViewFormulas_();
   applySummaryFormulas_();
   setupTargetDashboard();
+  rebuildBonusSheet();
   arrangeSheets_();
 }
 
@@ -193,7 +194,7 @@ function setupTransferProfit() {
 function arrangeSheets_() {
   const ss = SpreadsheetApp.getActive();
   const order = [
-    CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet,
+    CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet, BONUS_CFG.sheet,
     XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw,
     XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet,
     CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config

@@ -92,6 +92,7 @@ function syncYnabMirror_(opts) {
     else { setupTargetDashboard(); arrangeSheets_(); } // first run after a setup that ran out of time
     applyViewFormulas_();
     applySummaryFormulas_();
+    rebuildBonusSheet();
   } finally {
     lock.releaseLock();
   }

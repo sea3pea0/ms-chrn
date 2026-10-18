@@ -10,15 +10,17 @@
  * Targets are grouped by Config target_aliases (LemFi, MoneyLion, Coinbase, PYUSD, ...).
  *
  * setupTargetDashboard() builds the Targets sheet: pick a target in B1 and the tables
- * and charts follow; the bottom section compares all targets.
+ * and charts follow; the bottom section lists every target grouped by MS / MS-Crypto /
+ * Bill Pay (a target's group is where it earned the most cash back), highest-earning group first.
  */
 
 const TARGET_CFG = {
   // Bump when the dashboard layout changes; the hourly sync rebuilds it once.
-  version: '2',
+  version: '3',
   statsSheet: 'Target_Stats',
   dashSheet: 'Targets',
-  statsHeaders: ['target', 'period_type', 'period', 'money_in', 'money_out', 'cash_back', 'transfers'],
+  statsHeaders: ['target', 'period_type', 'period', 'money_in', 'money_out', 'cash_back', 'transfers', 'group'],
+  groupLabels: { MS: 'MS', MS_CRYPTO: 'MS-Crypto', BILL_PAY: 'Bill Pay' },
   buckets: new Set(['MS', 'MS_CRYPTO', 'BILL_PAY']),
   listCol: 26 // Z: dropdown source list on the Targets sheet
 };
@@ -42,14 +44,38 @@ function rebuildTargetStats() {
     sh.getRange(2, 4, rows.length, 3).setNumberFormat('$#,##0.00');
   }
 
-  // Dropdown list for the dashboard: targets by all-time money out.
+  // A target is somewhere a transfer earned cash back; the rest are just places money moved.
+  // Groups (MS / MS-Crypto / Bill Pay) in order of total cash back, targets within by cash back.
+  const all = rows.filter((r) => r[1] === 'all' && r[5] > 0 && r[7]);
+  const groupTotal = {};
+  all.forEach((r) => { groupTotal[r[7]] = (groupTotal[r[7]] || 0) + r[5]; });
+  const groupOrder = Object.keys(groupTotal).sort((a, b) => groupTotal[b] - groupTotal[a]);
+  all.sort((a, b) => groupOrder.indexOf(a[7]) - groupOrder.indexOf(b[7]) || b[5] - a[5]);
+
   const dash = ss.getSheetByName(TARGET_CFG.dashSheet);
   if (dash) {
-    // A target is somewhere a transfer earned cash back; the rest are just places money moved.
-    const names = rows.filter((r) => r[1] === 'all' && r[5] > 0).sort((a, b) => b[5] - a[5]).map((r) => [r[0]]);
     dash.getRange(1, TARGET_CFG.listCol, Math.max(dash.getMaxRows(), 1), 1).clearContent();
     dash.getRange(1, TARGET_CFG.listCol).setValue('targets');
-    if (names.length) dash.getRange(2, TARGET_CFG.listCol, names.length, 1).setValues(names);
+    if (all.length) dash.getRange(2, TARGET_CFG.listCol, all.length, 1).setValues(all.map((r) => [r[0]]));
+
+    // Grouped table from A35 and group totals (for the chart) at H35:I38.
+    dash.getRange('A35:F400').clearContent().setFontWeight('normal');
+    dash.getRange('H35:I38').clearContent();
+    const out = [['target', 'money in', 'money out', 'cash back', 'transfers', 'group']];
+    const bold = [];
+    groupOrder.forEach((g) => {
+      const rs = all.filter((r) => r[7] === g);
+      bold.push(out.length);
+      out.push([g, '', '', groupTotal[g], rs.reduce((s, r) => s + r[6], 0), '']);
+      rs.forEach((r) => out.push(['   ' + r[0], r[3], r[4], r[5], r[6], g]));
+    });
+    dash.getRange(35, 1, out.length, 6).setValues(out);
+    dash.getRange(35, 1, 1, 6).setFontWeight('bold');
+    bold.forEach((i) => dash.getRange(35 + i, 1, 1, 6).setFontWeight('bold').setBackground('#eef3fb'));
+    dash.getRange(36, 2, Math.max(out.length - 1, 1), 3).setNumberFormat('$#,##0');
+    dash.getRange(35, 8, 1 + groupOrder.length, 2).setValues(
+      [['group', 'cash back']].concat(groupOrder.map((g) => [g, Math.round(groupTotal[g] * 100) / 100])));
+    dash.getRange(36, 9, Math.max(groupOrder.length, 1), 1).setNumberFormat('$#,##0');
   }
   console.log('Target_Stats: ' + rows.length + ' rows');
   return rows.length;
@@ -71,6 +97,7 @@ function buildTargetStatsRows_(input) {
   // Cash back (and transfer count) from the ledger.
   const lh = mapHeaderIndexes_(input.ledger[0] || []);
   const groups = new Set(aliases.map((a) => a[0]));
+  const byBucket = {};
   input.ledger.slice(1).forEach((r) => {
     if (!TARGET_CFG.buckets.has(String(r[lh.bucket]))) return;
     const iso = cellIso_(r[lh.date], input.tz);
@@ -79,6 +106,15 @@ function buildTargetStatsRows_(input) {
     groups.add(group);
     add(group, iso, 'cash_back', toNumber_(r[lh.profit]));
     add(group, iso, 'transfers', 1);
+    const b = String(r[lh.bucket]);
+    byBucket[group] = byBucket[group] || {};
+    byBucket[group][b] = (byBucket[group][b] || 0) + toNumber_(r[lh.profit]);
+  });
+  // Each target's group is the bucket where it earned the most cash back.
+  const groupOf = {};
+  Object.keys(byBucket).forEach((t) => {
+    const best = Object.keys(byBucket[t]).sort((a, b) => byBucket[t][b] - byBucket[t][a])[0];
+    groupOf[t] = byBucket[t][best] > 0 ? TARGET_CFG.groupLabels[best] || best : '';
   });
 
   // Money in / out from every YNAB account (all sources, not only tracked ones).
@@ -114,7 +150,8 @@ function buildTargetStatsRows_(input) {
   return Object.values(stats)
     .sort((a, b) => (a.group < b.group ? -1 : a.group > b.group ? 1 : 0) ||
       order[a.type] - order[b.type] || (a.period < b.period ? -1 : a.period > b.period ? 1 : 0))
-    .map((s) => [s.group, s.type, s.period, r2(s.money_in), r2(s.money_out), r2(s.cash_back), s.transfers]);
+    .map((s) => [s.group, s.type, s.period, r2(s.money_in), r2(s.money_out), r2(s.cash_back), s.transfers,
+      groupOf[s.group] || '']);
 }
 
 function setupTargetDashboard() {
@@ -150,14 +187,12 @@ function setupTargetDashboard() {
   sh.getRange('F8').setFormula(
     `=IFERROR(SORT(QUERY('${S}'!A:G,"select C,D,E,F where A='"&$B$1&"' and B='month' order by C desc limit 24",0),1,TRUE),"")`);
 
-  // All targets, all time (A35:E)
-  sh.getRange('A34').setValue('All targets, all time');
-  sh.getRange('A35').setFormula(
-    `=IFERROR(QUERY('${S}'!A:G,"select A,D,E,F,G where B='all' and F > 0 order by F desc ` +
-    `label A 'target', D 'money in', E 'money out', F 'cash back', G 'transfers'",1),"")`);
+  // All targets by group (A34 down) and group totals (H35:I38): written by rebuildTargetStats.
+  sh.getRange('A34').setValue('All targets by group (highest-earning group first)');
+  rebuildTargetStats();
 
-  ['A3:F3', 'A6', 'F6', 'A7:D7', 'F7:I7', 'A34', 'A35:E35'].forEach((a) => sh.getRange(a).setFontWeight('bold'));
-  ['B4:E4', 'B8:D20', 'G8:I31', 'B36:D80'].forEach((a) => sh.getRange(a).setNumberFormat('$#,##0'));
+  ['A3:F3', 'A6', 'F6', 'A7:D7', 'F7:I7', 'A34'].forEach((a) => sh.getRange(a).setFontWeight('bold'));
+  ['B4:E4', 'B8:D20', 'G8:I31'].forEach((a) => sh.getRange(a).setNumberFormat('$#,##0'));
   sh.getRange('F8:F31').setNumberFormat('@');
 
   const combo = (range, title, row, col) => sh.insertChart(sh.newChart()
@@ -175,7 +210,10 @@ function setupTargetDashboard() {
     .build());
   combo('A7:D17', 'Selected target by year (B1)', 3, 11);
   combo('F7:I31', 'Selected target by month (B1)', 20, 11);
-  combo('A35:D55', 'All targets, all time (top 20 by cash back)', 37, 11);
+  sh.insertChart(sh.newChart().asColumnChart().addRange(sh.getRange('H35:I38')).setNumHeaders(1)
+    .setOption('title', 'Cash back by group').setOption('legend', { position: 'none' })
+    .setOption('vAxis', { format: '$#,##0' }).setOption('width', 760).setOption('height', 300)
+    .setPosition(37, 11, 0, 0).build());
   sh.setFrozenRows(1);
   PropertiesService.getDocumentProperties().setProperty('TARGETS_DASH_VERSION', TARGET_CFG.version);
 }
