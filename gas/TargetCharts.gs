@@ -14,6 +14,8 @@
  */
 
 const TARGET_CFG = {
+  // Bump when the dashboard layout changes; the hourly sync rebuilds it once.
+  version: '2',
   statsSheet: 'Target_Stats',
   dashSheet: 'Targets',
   statsHeaders: ['target', 'period_type', 'period', 'money_in', 'money_out', 'cash_back', 'transfers'],
@@ -43,7 +45,8 @@ function rebuildTargetStats() {
   // Dropdown list for the dashboard: targets by all-time money out.
   const dash = ss.getSheetByName(TARGET_CFG.dashSheet);
   if (dash) {
-    const names = rows.filter((r) => r[1] === 'all' && (r[3] || r[4] || r[5])).sort((a, b) => b[4] - a[4]).map((r) => [r[0]]);
+    // A target is somewhere a transfer earned cash back; the rest are just places money moved.
+    const names = rows.filter((r) => r[1] === 'all' && r[5] > 0).sort((a, b) => b[5] - a[5]).map((r) => [r[0]]);
     dash.getRange(1, TARGET_CFG.listCol, Math.max(dash.getMaxRows(), 1), 1).clearContent();
     dash.getRange(1, TARGET_CFG.listCol).setValue('targets');
     if (names.length) dash.getRange(2, TARGET_CFG.listCol, names.length, 1).setValues(names);
@@ -150,7 +153,7 @@ function setupTargetDashboard() {
   // All targets, all time (A35:E)
   sh.getRange('A34').setValue('All targets, all time');
   sh.getRange('A35').setFormula(
-    `=IFERROR(QUERY('${S}'!A:G,"select A,D,E,F,G where B='all' order by E desc ` +
+    `=IFERROR(QUERY('${S}'!A:G,"select A,D,E,F,G where B='all' and F > 0 order by F desc ` +
     `label A 'target', D 'money in', E 'money out', F 'cash back', G 'transfers'",1),"")`);
 
   ['A3:F3', 'A6', 'F6', 'A7:D7', 'F7:I7', 'A34', 'A35:E35'].forEach((a) => sh.getRange(a).setFontWeight('bold'));
@@ -172,6 +175,7 @@ function setupTargetDashboard() {
     .build());
   combo('A7:D17', 'Selected target by year (B1)', 3, 11);
   combo('F7:I31', 'Selected target by month (B1)', 20, 11);
-  combo('A35:D55', 'All targets, all time (top 20 by money out)', 37, 11);
+  combo('A35:D55', 'All targets, all time (top 20 by cash back)', 37, 11);
   sh.setFrozenRows(1);
+  PropertiesService.getDocumentProperties().setProperty('TARGETS_DASH_VERSION', TARGET_CFG.version);
 }

@@ -803,6 +803,20 @@ function buildTransferLedgerRows_(input) {
     (ppOut[t.accountId] = ppOut[t.accountId] || []).push(i);
   });
   const ppUsed = {};
+  // Every PayPal outflow, for the fallback below: what PayPal paid out right after a transfer in.
+  const ppAll = {};
+  txns.forEach((t, i) => {
+    if (!(t.outflow > 0) || !paypalRx.test(t.account)) return;
+    (ppAll[t.accountId] = ppAll[t.accountId] || []).push(i);
+  });
+  const ppClass = (p) => {
+    const pd = accounts[p.dstId];
+    if (pd && CFG.debtTypes.has(pd.type)) return { bucket: 'BILL_PAY', target: pd.name };
+    const text = [p.payee, p.category, p.memo].join(' ');
+    if (cryptoRx.test(text)) return { bucket: 'MS_CRYPTO', target: targetGroup_([p.category, p.payee], aliases) || p.payee };
+    if (billRx.test(text)) return { bucket: 'BILL_PAY', target: targetGroup_([p.payee], aliases) || p.payee };
+    return null;
+  };
 
   // Blue Penguin -> Robinhood transfers that fund a Robinhood credit card payment are Bill Pay.
   // Each card payment takes the unused transfers dated up to rh_pay_days before it (or 2 after),
@@ -898,6 +912,8 @@ function buildTransferLedgerRows_(input) {
     }
     else if (cryptoRx.test(text)) bucket = 'MS_CRYPTO';
     else if (dst && paypalRx.test(dst.name)) {
+      // Money sent to PayPal is a crypto buy (Uphold, PYUSD, Coinbase) or a bill payment; it is only
+      // MS (PayPal itself as the target) when it just tops up the PayPal balance.
       bucket = billRx.test(text) ? 'BILL_PAY' : 'MS';
       const cands = ppOut[dst.id] || [];
       for (let k = 0; k < cands.length; k += 1) {
@@ -907,9 +923,30 @@ function buildTransferLedgerRows_(input) {
         if (Math.abs(p.outflow - t.outflow) > Math.max(1, t.outflow * pairTol)) continue;
         ppUsed[cands[k]] = true;
         bucket = 'MS_CRYPTO';
-        pairedPayee = p.payee;
+        pairedPayee = targetGroup_([p.category, p.payee], aliases) || p.payee;
         note = 'via PayPal: ' + p.payee + ' ' + p.outflow.toFixed(2) + ' on ' + p.iso;
         break;
+      }
+      // No exact match: classify by what PayPal paid out (by amount) from 1 day before to 5 days
+      // after the transfer: crypto buys vs card payments; nothing like that = a balance top-up.
+      if (bucket === 'MS' && !pairedPayee) {
+        const tally = {};
+        (ppAll[dst.id] || []).forEach((k) => {
+          const p = txns[k];
+          const dd = isoDays_(p.iso) - isoDays_(t.iso);
+          if (dd < -1 || dd > 5) return;
+          const cls = ppClass(p);
+          if (!cls) return;
+          const key = cls.bucket + '|' + cls.target;
+          tally[key] = (tally[key] || 0) + p.outflow;
+        });
+        const best = Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0];
+        if (best) {
+          const parts = best.split('|');
+          bucket = parts[0];
+          pairedPayee = parts[1];
+          note = 'via PayPal: mostly ' + parts[1] + ' that week';
+        }
       }
     } else if (billRx.test(text)) bucket = 'BILL_PAY';
     else if (transferCat || dst || msRx.test(text)) bucket = 'MS';
@@ -940,7 +977,7 @@ function buildTransferLedgerRows_(input) {
       targetType: dst ? dst.type : '', amount: t.outflow, bucket: bucket, points: points, match: match,
       csvDesc: c ? c.desc : '', csvIso: c ? c.iso : '', id: t.id, memo: t.memo, note: note, fee: rowFee,
       group: (pairedPayee === 'Robinhood Credit Card' && pairedPayee) ||
-        (pairedPayee && targetGroup_([pairedPayee], aliases)) ||
+        (pairedPayee && (targetGroup_([pairedPayee], aliases) || pairedPayee)) ||
         (transferCat && (targetGroup_([transferCat], aliases) || transferCat)) ||
         // Paid through PayPal: the PayPal descriptor names the real target (PAYPAL *AMERICANEXP).
         (dst && paypalRx.test(dst.name) && c && targetGroup_([c.desc], aliases)) ||

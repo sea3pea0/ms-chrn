@@ -87,7 +87,8 @@ function syncYnabMirror_(opts) {
     importBlupeCsvs();
     try { refreshCoinbaseFees(); } catch (e) { console.warn('Coinbase fees: ' + e.message); }
     rebuildTransferLedger();
-    if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet)) rebuildTargetStats();
+    if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet) &&
+      PropertiesService.getDocumentProperties().getProperty('TARGETS_DASH_VERSION') === TARGET_CFG.version) rebuildTargetStats();
     else { setupTargetDashboard(); arrangeSheets_(); } // first run after a setup that ran out of time
     applyViewFormulas_();
     applySummaryFormulas_();
