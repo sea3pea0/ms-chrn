@@ -42,7 +42,28 @@ function syncYnabMirrorOnDemand() {
 }
 
 function syncYnabMirrorScheduled() {
-  syncYnabMirror_({ force: false, calledBy: 'trigger' });
+  const started = new Date();
+  try {
+    syncYnabMirror_({ force: false, calledBy: 'trigger' });
+    logSync_(started, 'ok', '');
+  } catch (e) {
+    logSync_(started, 'error', String(e && e.stack || e));
+    throw e;
+  }
+}
+
+/** Keep the last 50 sync results in a Sync_Log sheet (time, status, seconds, message). */
+function logSync_(started, status, message) {
+  try {
+    const sh = ensureSheet_(SpreadsheetApp.getActive(), 'Sync_Log');
+    if (sh.getLastRow() === 0) sh.appendRow(['started', 'status', 'seconds', 'message']);
+    sh.insertRowAfter(1);
+    sh.getRange(2, 1, 1, 4).setValues([[started, status, Math.round((Date.now() - started) / 1000),
+      String(message).slice(0, 2000)]]);
+    if (sh.getLastRow() > 51) sh.deleteRows(52, sh.getLastRow() - 51);
+  } catch (e) {
+    console.warn('logSync_: ' + e);
+  }
 }
 
 function syncYnabMirrorForceFull() {
