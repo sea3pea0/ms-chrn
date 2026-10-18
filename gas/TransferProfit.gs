@@ -927,6 +927,25 @@ function buildTransferLedgerRows_(input) {
         note = 'via PayPal: ' + p.payee + ' ' + p.outflow.toFixed(2) + ' on ' + p.iso;
         break;
       }
+      // PayPal bill pay: the target is the credit card PayPal paid, so name the card account. Prefer a
+      // PayPal payment to a card for about the same amount, else the card paid most that week.
+      if (bucket === 'BILL_PAY' && !pairedPayee) {
+        let exact = null;
+        const cardTally = {};
+        (ppAll[dst.id] || []).forEach((k) => {
+          const p = txns[k];
+          const pd = accounts[p.dstId];
+          const dd = isoDays_(p.iso) - isoDays_(t.iso);
+          if (!pd || !CFG.debtTypes.has(pd.type) || dd < -1 || dd > 5) return;
+          if (!exact && Math.abs(p.outflow - t.outflow) <= Math.max(1, t.outflow * pairTol)) exact = pd.name;
+          cardTally[pd.name] = (cardTally[pd.name] || 0) + p.outflow;
+        });
+        const card = exact || Object.keys(cardTally).sort((a, b) => cardTally[b] - cardTally[a])[0];
+        if (card) {
+          pairedPayee = card;
+          note = 'via PayPal: pays ' + card;
+        }
+      }
       // No exact match: classify by what PayPal paid out (by amount) from 1 day before to 5 days
       // after the transfer: crypto buys vs card payments; nothing like that = a balance top-up.
       if (bucket === 'MS' && !pairedPayee) {
