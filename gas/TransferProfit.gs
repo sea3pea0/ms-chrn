@@ -26,8 +26,6 @@ const XFER_CFG = {
   taekusFolder: 'Taekus Transaction CSVs',
   fluzFolder: 'Fluz Transaction CSVs',
   blupeFolder: 'Blue Penguin Transaction CSVs',
-  // coinbase_one_fees.csv, written daily by scripts/coinbase_fees.py on pea-docker (Coinbase API).
-  coinbaseFeeFolder: 'Coinbase Fees',
   // Coinbase One paid from a bank account shows up in YNAB as a Coinbase charge in a subscription
   // category; refunds of it are the matching inflows.
   coinbaseOneRegex: { payee: 'coinbase', category: 'subscription|coinbase one' },
@@ -183,6 +181,7 @@ function setupTransferProfit() {
   importTaekusCsvs();
   importFluzCsvs();
   importBlupeCsvs();
+  refreshCoinbaseFees(true);
   rebuildTransferLedger();
   applyViewFormulas_();
   applySummaryFormulas_();
@@ -196,7 +195,7 @@ function arrangeSheets_() {
   const order = [
     CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet,
     XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw,
-    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements,
+    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet,
     CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
   ];
   let pos = 1;
@@ -334,16 +333,17 @@ function taekusRowsFromCsvs_(files) {
 
 // ---------------------------------------------------------------- Coinbase One fees
 
-/** Rows of coinbase_one_fees.csv (Coinbase One paid from Coinbase balances), or [] if not there yet. */
+/** Coinbase_Fees sheet rows as objects (written by refreshCoinbaseFees in CoinbaseFees.gs). */
 function coinbaseFeeRows_() {
-  try {
-    const files = driveCsvs_(XFER_CFG.coinbaseFeeFolder);
-    const f = files.filter((x) => /coinbase_one_fees/i.test(x.name)).pop();
-    return f ? readCsvText_(f.text) : [];
-  } catch (e) {
-    console.warn('Coinbase fees: ' + e.message);
-    return [];
-  }
+  const sh = SpreadsheetApp.getActive().getSheetByName(CB_CFG.sheet);
+  if (!sh || sh.getLastRow() < 2) return [];
+  const v = sh.getDataRange().getValues();
+  return v.slice(1).map((r) => {
+    const o = {};
+    v[0].forEach((h, i) => { o[String(h)] = r[i]; });
+    o.date = cellIso_(o.date);
+    return o;
+  });
 }
 
 // ---------------------------------------------------------------- Blue Penguin CSV import
