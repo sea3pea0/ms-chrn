@@ -120,9 +120,9 @@ const XFER_CFG = {
       rh_crypto_end: '2025-06-10'
     },
     transfer_rules: {
-      crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin',
+      crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin|sling|morse',
       bill_pay_regex: 'citibank|\\bciti\\b|synchrony|syncb|credit card|card payment|cc payment|geico|americanexp|amex|barclaycard|discovercar|bankamerica',
-      ms_regex: 'lemfi|wise|revolut|sling|morse|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom|astra|honey ?fund|apple wallet|apple cash',
+      ms_regex: 'lemfi|wise|revolut|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom|astra|honey ?fund|apple wallet|apple cash',
       paypal_account_regex: '^PP',
       internal_account_regex: '^TK[BP]\\b',
       transfer_category_group: 'Transfer',

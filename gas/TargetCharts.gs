@@ -7,8 +7,10 @@
  *   group     = MS / MS-Crypto / Bill Pay (where the target earned the most cash back), or
  *               Bank Bonus & Referrals
  *   balance   = the YNAB balance of the target's own accounts (MoneyLion, Chime, Current, a credit
- *               card, ...), which nets every transaction in and out. Pass-through targets with no
- *               account (LemFi, Western Union, ...) have none. MS-Crypto is one balance for the
+ *               card, ...), which nets every transaction in and out. Pass-through targets
+ *               (TARGET_CFG.netFlowTargets: LemFi, Western Union) show transfers out minus
+ *               transfers back in, which should end at 0; anything else means a transfer is
+ *               missing or miscategorized in YNAB. MS-Crypto is one balance for the
  *               whole group: current Coinbase holdings (Coinbase_Balances, P1 + P2) plus the YNAB
  *               balance of any crypto accounts (e.g. a Robinhood brokerage account).
  *
@@ -18,14 +20,16 @@
 
 const TARGET_CFG = {
   // Bump when the dashboard layout changes; the hourly sync rebuilds it once.
-  version: '4',
+  version: '5',
   statsSheet: 'Target_Stats',
   dashSheet: 'Targets',
   statsHeaders: ['target', 'period_type', 'period', 'balance', 'cash_back', 'transfers', 'group'],
   groupLabels: { MS: 'MS', MS_CRYPTO: 'MS-Crypto', BILL_PAY: 'Bill Pay' },
   bonusGroup: 'Bank Bonus & Referrals',
   buckets: new Set(['MS', 'MS_CRYPTO', 'BILL_PAY']),
-  listCol: 26 // Z: dropdown source list on the Targets sheet
+  listCol: 26, // Z: dropdown source list on the Targets sheet
+  // Money sent here should all come back: balance = transfers out - transfers back in.
+  netFlowTargets: ['LemFi', 'Western Union']
 };
 
 function rebuildTargetStats() {
@@ -159,7 +163,39 @@ function buildTargetStatsRows_(input) {
   Object.keys(groupOf).forEach((t) => {
     if (groupOf[t] === TARGET_CFG.groupLabels.MS_CRYPTO) cryptoBalance += acctBalance[t] || 0;
   });
+  // Pass-through targets: transfers out minus transfers back in, from every YNAB transaction whose
+  // category, payee or split payee names the target. Spending paid through the target (a bill
+  // categorized Mortgage, say) is not a transfer and is left out. A split that pays the target
+  // and transfers straight to one of the user's accounts (Western Union: fee line + transfer to
+  // SOFD) already shows the money back, so it nets to 0 and is skipped.
+  const netFlow = {};
+  const nfAliases = aliases.filter((a) => TARGET_CFG.netFlowTargets.indexOf(a[0]) >= 0);
+  const mh = mapHeaderIndexes_((input.mirror || [])[0] || []);
+  const transferGroup = String(((input.cfg || {}).transfer_rules || {}).transfer_category_group || 'Transfer')
+    .toLowerCase();
+  if (nfAliases.length && mh.Outflow !== undefined) {
+    input.mirror.slice(1).forEach((r) => {
+      if (String(r[mh.deleted]).toLowerCase() === 'true') return;
+      const cat = String(r[mh.Category] || '').trim();
+      const grp = String(r[mh['Category Group']] || '').trim().toLowerCase();
+      const payee = String(r[mh.Payee] || '');
+      const splitPayees = mh.split_payees === undefined ? [] : String(r[mh.split_payees] || '').split(' | ');
+      const dst = String(r[mh.transfer_account_id] || '').trim();
+      nfAliases.forEach((a) => {
+        const rx = a[1];
+        const byCat = rx.test(cat);
+        const byPayee = rx.test(payee) || splitPayees.some((p) => rx.test(p));
+        if (!byCat && !byPayee) return;
+        if (!byCat && splitPayees.length > 1 && dst) return; // paid and transferred back in one split
+        if (!byCat && dst) return;
+        // Only transfer-like categories: the target's own, the Transfer group, or none yet.
+        if (!byCat && cat && grp !== transferGroup && !/uncategorized|ready to assign/i.test(cat)) return;
+        netFlow[a[0]] = (netFlow[a[0]] || 0) + toNumber_(r[mh.Outflow]) - toNumber_(r[mh.Inflow]);
+      });
+    });
+  }
   const balanceOf = (t) => {
+    if (t in netFlow) return Math.round(netFlow[t] * 100) / 100;
     const g = groupOf[t];
     if (!g || g === TARGET_CFG.bonusGroup || g === TARGET_CFG.groupLabels.MS_CRYPTO) return '';
     return t in acctBalance ? Math.round(acctBalance[t] * 100) / 100 : '';
