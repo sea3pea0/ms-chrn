@@ -1,7 +1,7 @@
 /**
  * Fluz transactions pulled from the official Fluz API instead of hand-exported CSVs.
  *
- * refreshFluzApiCsv() asks the API for every transaction updated in the last FLUZ_API.days days
+ * refreshFluzApiCsv() (run by fluzSyncApply, hourly at :23) asks the API for every transaction updated in the last FLUZ_API.days days
  * and writes them, in Fluz's own export format, to one file in the "Fluz Transaction CSVs" Drive
  * folder (FLUZ_API.fileName, replaced each run). Everything downstream is unchanged: the workbook
  * import and the Fluz -> YNAB sync already read every CSV in that folder and merge overlapping

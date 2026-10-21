@@ -50,6 +50,8 @@ function fluzSyncDryRun() {
 }
 
 function fluzSyncApply() {
+  // Pull fresh rows from the Fluz API into the Drive folder first (no-op without FLUZ_API_KEY).
+  try { refreshFluzApiCsv(); } catch (e) { console.warn('Fluz API: ' + e.message); }
   return csvSyncLocked_('fluzSync', () => fluzSync_(true));
 }
 

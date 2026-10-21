@@ -112,9 +112,6 @@ function syncYnabMirror_(opts) {
     combinedMirrorCache_ = null;
     syncStep_('history', () => importYnabHistory());
     syncStep_('taekus', () => importTaekusCsvs());
-    syncStep_('fluzApi', () => {
-      try { const n = refreshFluzApiCsv(); if (n) syncNotes_.push('Fluz API ' + n + ' rows'); } catch (e) { syncNotes_.push('Fluz API: ' + e.message); }
-    });
     syncStep_('fluz', () => importFluzCsvs());
     syncStep_('blupe', () => importBlupeCsvs());
     syncStep_('coinbase', () => {

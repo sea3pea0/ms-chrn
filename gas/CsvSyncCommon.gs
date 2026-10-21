@@ -76,9 +76,13 @@ function cut_(s, n) {
 
 // ---------------------------------------------------------------- dates (ISO yyyy-mm-dd strings)
 
+// Memoized: the ledger's date-window matching calls this millions of times on a few thousand dates.
+const isoDaysCache_ = {};
 function isoDays_(iso) {
+  const hit = isoDaysCache_[iso];
+  if (hit !== undefined) return hit;
   const p = iso.split('-').map(Number);
-  return Date.UTC(p[0], p[1] - 1, p[2]) / 86400000;
+  return (isoDaysCache_[iso] = Date.UTC(p[0], p[1] - 1, p[2]) / 86400000);
 }
 
 function isoAddDays_(iso, n) {
