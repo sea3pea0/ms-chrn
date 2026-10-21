@@ -185,7 +185,7 @@ function setupTransferProfit() {
   importFluzCsvs(true);
   importBlupeCsvs(true);
   refreshCoinbaseFees(true);
-  refreshMetaMaskRewards();
+  refreshMetaMaskRewards(true);
   rebuildTransferLedger();
   applyViewFormulas_();
   applySummaryFormulas_();

@@ -2,8 +2,9 @@
  * MetaMask Card cash back, read from the blockchain: the rewards are mUSD transfers on Linea from
  * MetaMask's rewards address to the user's wallets. No API key; the public Linea RPC is used.
  *
- * refreshMetaMaskRewards() scans new blocks since the last run (eth_getLogs, 10,000 blocks per
- * request) and appends each reward to the MetaMask_Rewards sheet. The ledger treats the MMCA
+ * refreshMetaMaskRewards() runs about once a week (the card is rarely used now): it scans the blocks
+ * since the last run (eth_getLogs, 10,000 blocks per request) and appends each reward to the
+ * MetaMask_Rewards sheet. The ledger treats the MMCA
  * accounts as a deposit-allocated source (key METAMASK, see XFER_CFG.depositSources): each
  * month's rewards for a wallet are spread over that month's outflows from its YNAB account.
  */
@@ -25,10 +26,12 @@ const MM_CFG = {
   batch: 20, // parallel requests per fetchAll
   maxChunksPerRun: 400,
   propKey: 'METAMASK_LAST_BLOCK',
+  lastRunKey: 'METAMASK_LAST_RUN_MS',
+  refreshDays: 7,
   transferTopic: '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 };
 
-function refreshMetaMaskRewards() {
+function refreshMetaMaskRewards(force) {
   const ss = SpreadsheetApp.getActive();
   const sh = ensureSheet_(ss, MM_CFG.sheet);
   if (sh.getLastRow() < 1) {
@@ -36,6 +39,9 @@ function refreshMetaMaskRewards() {
     sh.setFrozenRows(1);
   }
   const props = PropertiesService.getDocumentProperties();
+  // The card is rarely used now: rescan weekly (the hourly sync calls this; force skips the wait).
+  const lastMs = Number(props.getProperty(MM_CFG.lastRunKey) || 0);
+  if (force !== true && sh.getLastRow() > 1 && Date.now() - lastMs < MM_CFG.refreshDays * 86400000) return 0;
   // Empty sheet = start over from the first reward block.
   let from = sh.getLastRow() > 1 ? Number(props.getProperty(MM_CFG.propKey) || 0) + 1 : MM_CFG.startBlock;
   if (from < MM_CFG.startBlock) from = MM_CFG.startBlock;
@@ -80,6 +86,7 @@ function refreshMetaMaskRewards() {
     sh.getRange(r0, 1, rows.length, MM_CFG.headers.length).setValues(rows);
   }
   props.setProperty(MM_CFG.propKey, String(scannedTo));
+  if (scannedTo >= latest) props.setProperty(MM_CFG.lastRunKey, String(Date.now())); // else finish next run
   console.log('MetaMask_Rewards: +' + rows.length + ' (scanned to block ' + scannedTo + ' of ' + latest + ')');
   return rows.length;
 }
