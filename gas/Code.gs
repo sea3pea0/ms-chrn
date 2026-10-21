@@ -45,7 +45,7 @@ function syncYnabMirrorScheduled() {
   const started = new Date();
   try {
     syncYnabMirror_({ force: false, calledBy: 'trigger' });
-    logSync_(started, 'ok', '');
+    logSync_(started, 'ok', syncNotes_.join(' | '));
   } catch (e) {
     logSync_(started, 'error', String(e && e.stack || e));
     throw e;
@@ -53,6 +53,9 @@ function syncYnabMirrorScheduled() {
 }
 
 /** Keep the last 50 sync results in a Sync_Log sheet (time, status, seconds, message). */
+// Side-step results (Fluz API, Coinbase, MetaMask) shown in the Sync_Log message column.
+var syncNotes_ = [];
+
 function logSync_(started, status, message) {
   try {
     const sh = ensureSheet_(SpreadsheetApp.getActive(), 'Sync_Log');
@@ -83,11 +86,11 @@ function syncYnabMirror_(opts) {
     importYnabHistory();
 
     importTaekusCsvs();
-    try { refreshFluzApiCsv(); } catch (e) { console.warn('Fluz API: ' + e.message); }
+    try { const n = refreshFluzApiCsv(); if (n) syncNotes_.push('Fluz API ' + n + ' rows'); } catch (e) { syncNotes_.push('Fluz API: ' + e.message); }
     importFluzCsvs();
     importBlupeCsvs();
-    try { refreshCoinbaseFees(); } catch (e) { console.warn('Coinbase fees: ' + e.message); }
-    try { refreshMetaMaskRewards(); } catch (e) { console.warn('MetaMask rewards: ' + e.message); }
+    try { refreshCoinbaseFees(); } catch (e) { syncNotes_.push('Coinbase fees: ' + e.message); }
+    try { const n = refreshMetaMaskRewards(); if (n) syncNotes_.push('MetaMask +' + n); } catch (e) { syncNotes_.push('MetaMask: ' + e.message); }
     rebuildTransferLedger();
     if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet) &&
       PropertiesService.getDocumentProperties().getProperty('TARGETS_DASH_VERSION') === TARGET_CFG.version) rebuildTargetStats();
