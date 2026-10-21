@@ -86,6 +86,7 @@ function syncYnabMirror_(opts) {
     importFluzCsvs();
     importBlupeCsvs();
     try { refreshCoinbaseFees(); } catch (e) { console.warn('Coinbase fees: ' + e.message); }
+    try { refreshMetaMaskRewards(); } catch (e) { console.warn('MetaMask rewards: ' + e.message); }
     rebuildTransferLedger();
     if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet) &&
       PropertiesService.getDocumentProperties().getProperty('TARGETS_DASH_VERSION') === TARGET_CFG.version) rebuildTargetStats();
@@ -390,14 +391,14 @@ function applySummaryFormulas_() {
   const tracked = '{"MS","MS_CRYPTO","BILL_PAY"}';
   sh.getRange('L3:M3').setValues([['Source', 'Profit']]);
   [['TAEKUS', 'Taekus (points)'], ['FLUZ', 'Fluz (cashback)'], ['BLUPE', 'Blue Penguin (est. interchange share)'],
-    ['UPGRADE', 'Upgrade (monthly rewards)'], ['PRIMIS', 'Primis (monthly rewards)']]
+    ['UPGRADE', 'Upgrade (monthly rewards)'], ['PRIMIS', 'Primis (monthly rewards)'], ['METAMASK', 'MetaMask Card (on-chain mUSD)']]
     .forEach((src, i) => {
       sh.getRange(4 + i, 12).setValue(src[1]);
       sh.getRange(4 + i, 13).setFormula(`=SUM(SUMIFS('${L}'!K:K,'${L}'!B:B,"${src[0]}",'${L}'!H:H,${tracked}))`);
     });
-  sh.getRange('L9').setValue('Blue Penguin rebates received');
-  sh.getRange('M9').setFormula(`=SUMIFS('${L}'!V:V,'${L}'!H:H,"BLUPE_REBATE")`);
-  sh.getRange('M4:M9').setNumberFormat('$#,##0.00');
+  sh.getRange('L10').setValue('Blue Penguin rebates received');
+  sh.getRange('M10').setFormula(`=SUMIFS('${L}'!V:V,'${L}'!H:H,"BLUPE_REBATE")`);
+  sh.getRange('M4:M10').setNumberFormat('$#,##0.00');
   sh.getRange('L3:M3').setFontWeight('bold');
 
   sh.getRange('A13:C13').setValues([['Sync Info', 'Value', 'Notes']]);

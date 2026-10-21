@@ -165,7 +165,9 @@ const XFER_CFG = {
   // comes from the payee ("Upgrade Cashback Rewards for July 2024") or is lagMonths before the deposit.
   depositSources: [
     { key: 'UPGRADE', accountRegex: '^UPG[DS]\\b', rewardRegex: 'upgrade cashback rewards for ([a-z]+ \\d{4})', lagMonths: 1 },
-    { key: 'PRIMIS', accountRegex: '^PRMS\\b', rewardRegex: '^cashback rewards', lagMonths: 1 }
+    { key: 'PRIMIS', accountRegex: '^PRMS\\b', rewardRegex: '^cashback rewards', lagMonths: 1 },
+    // MetaMask Card: rewards are paid on-chain in mUSD (MetaMask_Rewards sheet), not seen by YNAB.
+    { key: 'METAMASK', accountRegex: '^MMCA\\b', external: 'metaMaskRewards', lagMonths: 0 }
   ],
   triggerFn: 'syncYnabMirrorScheduled',
   triggerMinute: 32
@@ -183,6 +185,7 @@ function setupTransferProfit() {
   importFluzCsvs(true);
   importBlupeCsvs(true);
   refreshCoinbaseFees(true);
+  refreshMetaMaskRewards();
   rebuildTransferLedger();
   applyViewFormulas_();
   applySummaryFormulas_();
@@ -197,7 +200,7 @@ function arrangeSheets_() {
   const order = [
     CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet, BONUS_CFG.sheet,
     XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, XFER_CFG.sheets.fluzRaw,
-    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet, CB_CFG.balanceSheet,
+    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet, CB_CFG.balanceSheet, MM_CFG.sheet,
     CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
   ];
   let pos = 1;
@@ -503,6 +506,7 @@ function rebuildTransferLedger() {
     blupe: ss.getSheetByName(XFER_CFG.sheets.blupeRaw).getDataRange().getValues(),
     blupeStatements: ss.getSheetByName(XFER_CFG.sheets.blupeStatements).getDataRange().getValues(),
     coinbaseFees: coinbaseFeeRows_(),
+    metaMaskRewards: metaMaskRewardRows_(),
     overrides: ss.getSheetByName(XFER_CFG.sheets.overrides).getDataRange().getValues(),
     cfg: xferConfig_(),
     tz: ss.getSpreadsheetTimeZone()
@@ -568,7 +572,7 @@ function buildTransferLedgerRows_(input) {
     }
   });
   const depSrc = (XFER_CFG.depositSources || []).map((d) => Object.assign({}, d, {
-    accRx: new RegExp(d.accountRegex, 'i'), rewRx: new RegExp(d.rewardRegex, 'i')
+    accRx: new RegExp(d.accountRegex, 'i'), rewRx: d.rewardRegex ? new RegExp(d.rewardRegex, 'i') : null
   }));
   Object.keys(accounts).forEach((id) => {
     const d = depSrc.find((s) => s.accRx.test(accounts[id].name));
@@ -1088,7 +1092,7 @@ function buildTransferLedgerRows_(input) {
     txns.forEach((t) => {
       const key = last4ById[t.accountId];
       const d = depSrc.find((s) => s.key === key);
-      if (!d || !(t.inflow > 0) || t.dstId) return;
+      if (!d || !d.rewRx || !(t.inflow > 0) || t.dstId) return;
       const m = [t.payee, t.memo].join(' ').match(d.rewRx);
       if (!m) return;
       let month = shiftMonth(t.iso.slice(0, 7), d.lagMonths || 0);
@@ -1097,6 +1101,14 @@ function buildTransferLedgerRows_(input) {
         if (mm && monNames[mm[1]]) month = mm[2] + '-' + ('0' + monNames[mm[1]]).slice(-2);
       }
       reward[key + '|' + month] = (reward[key + '|' + month] || 0) + t.inflow;
+    });
+    // Rewards recorded outside YNAB (MetaMask on-chain): [{date, account, amount}].
+    depSrc.filter((d) => d.external).forEach((d) => {
+      (input[d.external] || []).forEach((x) => {
+        if (!/^\d{4}-\d{2}/.test(String(x.date || '')) || !(x.amount > 0)) return;
+        const k = d.key + '|' + shiftMonth(x.date.slice(0, 7), d.lagMonths || 0);
+        reward[k] = (reward[k] || 0) + x.amount;
+      });
     });
     const base = {};
     // The reward was earned on all card spend that month (purchases too), so every outflow except
