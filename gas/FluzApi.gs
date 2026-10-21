@@ -18,7 +18,9 @@ const FLUZ_API = {
   scopes: ['LIST_PAYMENT', 'LIST_PURCHASES'],
   fileName: 'fluz_api_transactions.csv',
   days: 45, // rows updated within this window are rewritten each run (pending -> settled)
-  pageSize: 100,
+  pageSize: 20, // API maximum
+  // The API returns unsigned amounts; Fluz's export makes money leaving Fluz negative.
+  outflowTypes: /purchase|withdrawal|transfer - out/i,
   // Same columns, in the same order, as Fluz's "all transactions" export.
   csvHeaders: ['Transaction ID', 'Bulk Order ID', 'User', 'Type', 'Amount', 'Destination', 'Source', 'Cashback',
     'Cashback Rate', 'Bonus Cashback Rate', 'Fee', 'Status', 'Reference ID', 'Description', 'Note', 'Category',
@@ -57,7 +59,8 @@ function refreshFluzApiCsv() {
   const n5 = (x) => (x === null || x === undefined ? '0.00000' : Number(x).toFixed(5));
   const usd = (x) => (x === null || x === undefined ? '--' : '$' + Number(x).toFixed(2));
   const rows = txns.map((t) => [
-    t.recordId, '--', v(t.user), v(t.transactionType), n5(t.amount), v(t.destination), v(t.source),
+    t.recordId, '--', v(t.user), v(t.transactionType),
+    n5(FLUZ_API.outflowTypes.test(t.transactionType || '') ? -Math.abs(t.amount) : t.amount), v(t.destination), v(t.source),
     n5(t.cashback), n5(t.cashbackRate), n5(t.bonusCashbackRate), n5(t.fee), v(t.status), v(t.referenceId),
     v(t.description), v(t.note), v(t.category), v(t.cardLastFour), v(t.cardDisplayName),
     t.originalCurrencyAmount === null || t.originalCurrencyAmount === undefined ? '--' : n5(t.originalCurrencyAmount),
