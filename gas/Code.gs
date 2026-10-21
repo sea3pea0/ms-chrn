@@ -398,7 +398,7 @@ function applySummaryFormulas_() {
     ['UPGRADE', 'Upgrade (monthly rewards)'], ['PRIMIS', 'Primis (monthly rewards)'], ['METAMASK', 'MetaMask Card (on-chain mUSD)']]
     .forEach((src, i) => {
       sh.getRange(4 + i, 12).setValue(src[1]);
-      sh.getRange(4 + i, 13).setFormula(`=SUM(SUMIFS('${L}'!K:K,'${L}'!B:B,"${src[0]}",'${L}'!H:H,${tracked}))`);
+      sh.getRange(4 + i, 13).setFormula(`=SUM(ARRAYFORMULA(SUMIFS('${L}'!K:K,'${L}'!B:B,"${src[0]}",'${L}'!H:H,${tracked})))`);
     });
   sh.getRange('L10').setValue('Blue Penguin rebates received');
   sh.getRange('M10').setFormula(`=SUMIFS('${L}'!V:V,'${L}'!H:H,"BLUPE_REBATE")`);
