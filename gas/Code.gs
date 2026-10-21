@@ -422,13 +422,14 @@ function applySummaryFormulas_() {
   sh.getRange('H3:J3').setFontWeight('bold');
   // Profit by source, and Blue Penguin's actual monthly rebates next to the per-transfer estimate
   // (estimate = interchange x Config blupe/interchange_share).
-  const tracked = '{"MS","MS_CRYPTO","BILL_PAY"}';
   sh.getRange('L3:M3').setValues([['Source', 'Profit']]);
   [['TAEKUS', 'Taekus (points)'], ['FLUZ', 'Fluz (cashback)'], ['BLUPE', 'Blue Penguin (est. interchange share)'],
     ['UPGRADE', 'Upgrade (monthly rewards)'], ['PRIMIS', 'Primis (monthly rewards)'], ['METAMASK', 'MetaMask Card (on-chain mUSD)']]
     .forEach((src, i) => {
       sh.getRange(4 + i, 12).setValue(src[1]);
-      sh.getRange(4 + i, 13).setFormula(`=SUM(ARRAYFORMULA(SUMIFS('${L}'!K:K,'${L}'!B:B,"${src[0]}",'${L}'!H:H,${tracked})))`);
+      // One SUMIFS per bucket: Sheets doesn't expand an array criterion inside SUMIFS reliably.
+      sh.getRange(4 + i, 13).setFormula('=' + ['MS', 'MS_CRYPTO', 'BILL_PAY'].map((b) =>
+        `SUMIFS('${L}'!K:K,'${L}'!B:B,"${src[0]}",'${L}'!H:H,"${b}")`).join('+'));
     });
   sh.getRange('L10').setValue('Blue Penguin rebates received');
   sh.getRange('M10').setFormula(`=SUMIFS('${L}'!V:V,'${L}'!H:H,"BLUPE_REBATE")`);
