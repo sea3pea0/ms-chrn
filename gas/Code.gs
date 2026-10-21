@@ -43,11 +43,15 @@ function syncYnabMirrorOnDemand() {
 
 function syncYnabMirrorScheduled() {
   const started = new Date();
+  // A "running" row is written first and updated after every step, so a run that hits the
+  // 6-minute limit still shows how far it got and how long each step took.
+  logSync_(started, 'running', '');
+  syncLogLive_ = started;
   try {
     syncYnabMirror_({ force: false, calledBy: 'trigger' });
-    logSync_(started, 'ok', syncNotes_.join(' | '));
+    updateSyncLog_('ok');
   } catch (e) {
-    logSync_(started, 'error', String(e && e.stack || e));
+    updateSyncLog_('error', String(e && e.stack || e));
     throw e;
   }
 }
@@ -55,6 +59,29 @@ function syncYnabMirrorScheduled() {
 /** Keep the last 50 sync results in a Sync_Log sheet (time, status, seconds, message). */
 // Side-step results (Fluz API, Coinbase, MetaMask) shown in the Sync_Log message column.
 var syncNotes_ = [];
+var syncLogLive_ = null; // start time of the scheduled run whose Sync_Log row is row 2
+
+/** Run one sync step, timing it into the Sync_Log message. */
+function syncStep_(name, fn) {
+  const t0 = Date.now();
+  try {
+    return fn();
+  } finally {
+    syncNotes_.push(name + ' ' + Math.round((Date.now() - t0) / 1000) + 's');
+    updateSyncLog_('running');
+  }
+}
+
+function updateSyncLog_(status, extra) {
+  if (!syncLogLive_) return;
+  try {
+    const sh = SpreadsheetApp.getActive().getSheetByName('Sync_Log');
+    sh.getRange(2, 2, 1, 3).setValues([[status, Math.round((Date.now() - syncLogLive_) / 1000),
+      (syncNotes_.join(' | ') + (extra ? ' | ' + extra : '')).slice(0, 2000)]]);
+  } catch (e) {
+    console.warn('updateSyncLog_: ' + e);
+  }
+}
 
 function logSync_(started, status, message) {
   try {
@@ -81,23 +108,29 @@ function syncYnabMirror_(opts) {
       return;
     }
 
-    pullYnabMirror_(opts);
+    syncStep_('ynab', () => pullYnabMirror_(opts));
     combinedMirrorCache_ = null;
-    importYnabHistory();
-
-    importTaekusCsvs();
-    try { const n = refreshFluzApiCsv(); if (n) syncNotes_.push('Fluz API ' + n + ' rows'); } catch (e) { syncNotes_.push('Fluz API: ' + e.message); }
-    importFluzCsvs();
-    importBlupeCsvs();
-    try { refreshCoinbaseFees(); } catch (e) { syncNotes_.push('Coinbase fees: ' + e.message); }
-    try { const n = refreshMetaMaskRewards(); if (n) syncNotes_.push('MetaMask +' + n); } catch (e) { syncNotes_.push('MetaMask: ' + e.message); }
-    rebuildTransferLedger();
-    if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet) &&
-      PropertiesService.getDocumentProperties().getProperty('TARGETS_DASH_VERSION') === TARGET_CFG.version) rebuildTargetStats();
-    else { setupTargetDashboard(); arrangeSheets_(); } // first run after a setup that ran out of time
-    applyViewFormulas_();
-    applySummaryFormulas_();
-    rebuildBonusSheet();
+    syncStep_('history', () => importYnabHistory());
+    syncStep_('taekus', () => importTaekusCsvs());
+    syncStep_('fluzApi', () => {
+      try { const n = refreshFluzApiCsv(); if (n) syncNotes_.push('Fluz API ' + n + ' rows'); } catch (e) { syncNotes_.push('Fluz API: ' + e.message); }
+    });
+    syncStep_('fluz', () => importFluzCsvs());
+    syncStep_('blupe', () => importBlupeCsvs());
+    syncStep_('coinbase', () => {
+      try { refreshCoinbaseFees(); } catch (e) { syncNotes_.push('Coinbase fees: ' + e.message); }
+    });
+    syncStep_('metamask', () => {
+      try { const n = refreshMetaMaskRewards(); if (n) syncNotes_.push('MetaMask +' + n); } catch (e) { syncNotes_.push('MetaMask: ' + e.message); }
+    });
+    syncStep_('ledger', () => rebuildTransferLedger());
+    syncStep_('targets', () => {
+      if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet) &&
+        PropertiesService.getDocumentProperties().getProperty('TARGETS_DASH_VERSION') === TARGET_CFG.version) rebuildTargetStats();
+      else { setupTargetDashboard(); arrangeSheets_(); } // first run after a setup that ran out of time
+    });
+    syncStep_('views', () => { applyViewFormulas_(); applySummaryFormulas_(); });
+    syncStep_('bonus', () => rebuildBonusSheet());
   } finally {
     lock.releaseLock();
   }

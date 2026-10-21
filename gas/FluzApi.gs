@@ -67,6 +67,8 @@ function refreshFluzApiCsv() {
     v(t.originalCurrencyCode), v(t.channel), v(t.createdAt), v(t.updatedAt),
     usd(t.cashBalanceAvailableBalance), usd(t.cashBalanceTotalBalance), v(t.transactionCategory), v(t.memo)
   ]);
+  // Stable order, so an unchanged result leaves the file (and the hourly re-import) alone.
+  rows.sort((x, y) => (x[21] < y[21] ? 1 : x[21] > y[21] ? -1 : x[0] < y[0] ? -1 : 1));
   const csv = [FLUZ_API.csvHeaders].concat(rows).map((r) => r.map((c) => {
     const s = String(c);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
