@@ -83,6 +83,7 @@ function syncYnabMirror_(opts) {
     importYnabHistory();
 
     importTaekusCsvs();
+    try { refreshFluzApiCsv(); } catch (e) { console.warn('Fluz API: ' + e.message); }
     importFluzCsvs();
     importBlupeCsvs();
     try { refreshCoinbaseFees(); } catch (e) { console.warn('Coinbase fees: ' + e.message); }
