@@ -1,5 +1,6 @@
-// MS-CHRN Sync: every hour (and when the icon is clicked) pull each site you're signed in to and
-// post the rows to the workbook's web-app endpoint (gas/Ingest.gs). Add a site by writing an
+// MS-CHRN Sync: whenever you open a site (and hourly while its session lasts, or when the icon
+// is clicked) pull each site you're signed in to and post the rows to the workbook's web-app
+// endpoint (gas/Ingest.gs). Add a site by writing an
 // adapter in sites/ and listing it in SITES.
 import { taekus } from './sites/taekus.js';
 
@@ -52,6 +53,21 @@ async function syncAll() {
   else await badge('', null, 'last synced ' + new Date().toLocaleString());
   return status;
 }
+
+// Taekus sessions are short, so also sync whenever a site page finishes loading in any tab
+// (i.e. right after you sign in), at most once per 10 minutes.
+let lastVisitSync = 0;
+chrome.tabs.onUpdated.addListener((_id, info, tab) => {
+  if (info.status !== 'complete' || !tab.url) return;
+  if (!SITES.some((s) => tab.url.startsWith(s.loginUrl))) return;
+  if (Date.now() - lastVisitSync < 10 * 60000) return;
+  // Wait for the site's own sign-in calls; only a successful sync starts the 10-minute pause,
+  // so loading the login page and then signing in still syncs.
+  setTimeout(async () => {
+    const st = await syncAll();
+    if (st && st.sites && Object.values(st.sites).every((r) => r.ok)) lastVisitSync = Date.now();
+  }, 5000);
+});
 
 chrome.runtime.onInstalled.addListener(schedule);
 chrome.runtime.onStartup.addListener(schedule);
