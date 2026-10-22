@@ -64,7 +64,7 @@ function refreshCoinbaseFees(force) {
     bs.getRange(2, 1, balances.length, 6).setValues(balances.map((b) => b.concat([new Date()])));
     bs.getRange(2, 5, balances.length, 1).setNumberFormat('$#,##0.00');
   }
-  rows.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  rows.sort((x, y) => (x[0] < y[0] ? 1 : x[0] > y[0] ? -1 : 0)); // newest on top
 
   const w = CB_CFG.headers.length;
   sh.clearContents();

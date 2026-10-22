@@ -84,6 +84,8 @@ function refreshMetaMaskRewards(force) {
     const r0 = sh.getLastRow() + 1;
     sh.getRange(r0, 1, rows.length, 1).setNumberFormat('@');
     sh.getRange(r0, 1, rows.length, MM_CFG.headers.length).setValues(rows);
+    // Newest on top (by block).
+    sh.getRange(2, 1, sh.getLastRow() - 1, MM_CFG.headers.length).sort({ column: 5, ascending: false });
   }
   props.setProperty(MM_CFG.propKey, String(scannedTo));
   if (scannedTo >= latest) props.setProperty(MM_CFG.lastRunKey, String(Date.now())); // else finish next run

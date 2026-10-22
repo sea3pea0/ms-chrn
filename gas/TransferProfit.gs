@@ -317,7 +317,7 @@ function importTaekusCsvs(force) {
   if (rows.length) {
     const rng = sh.getRange(2, 1, rows.length, XFER_CFG.taekusRawHeaders.length);
     rng.setNumberFormat('@');
-    rng.setValues(rows);
+    rng.setValues(rows.slice().reverse()); // newest on top
   }
   markCsvFolderImported_(XFER_CFG.sheets.taekusRaw);
   console.log('Taekus_Raw: ' + rows.length + ' rows');
@@ -398,7 +398,7 @@ function importBlupeCsvs(force) {
   if (rows.length) {
     const rng = sh.getRange(2, 1, rows.length, w);
     rng.setNumberFormat('@');
-    rng.setValues(rows);
+    rng.setValues(rows.slice().reverse()); // newest on top
   }
   markCsvFolderImported_(XFER_CFG.sheets.blupeRaw);
   console.log('BLUPE_Raw: ' + rows.length + ' rows');
@@ -441,7 +441,7 @@ function importFluzCsvs(force) {
   if (rows.length) {
     const rng = sh.getRange(2, 1, rows.length, w);
     rng.setNumberFormat('@');
-    rng.setValues(rows);
+    rng.setValues(rows.slice().reverse()); // newest on top
   }
   markCsvFolderImported_(XFER_CFG.sheets.fluzRaw);
   console.log('Fluz_Raw: ' + rows.length + ' rows');
@@ -501,9 +501,9 @@ function rebuildTransferLedger() {
   const rows = buildTransferLedgerRows_({
     mirror: combinedMirror_(),
     accounts: ss.getSheetByName(CFG.sheets.ynabAccounts).getDataRange().getValues(),
-    taekus: ss.getSheetByName(XFER_CFG.sheets.taekusRaw).getDataRange().getValues(),
-    fluz: ss.getSheetByName(XFER_CFG.sheets.fluzRaw).getDataRange().getValues(),
-    blupe: ss.getSheetByName(XFER_CFG.sheets.blupeRaw).getDataRange().getValues(),
+    taekus: oldestFirst_(ss.getSheetByName(XFER_CFG.sheets.taekusRaw).getDataRange().getValues(), 2),
+    fluz: oldestFirst_(ss.getSheetByName(XFER_CFG.sheets.fluzRaw).getDataRange().getValues(), 4),
+    blupe: oldestFirst_(ss.getSheetByName(XFER_CFG.sheets.blupeRaw).getDataRange().getValues(), 2),
     blupeStatements: ss.getSheetByName(XFER_CFG.sheets.blupeStatements).getDataRange().getValues(),
     coinbaseFees: coinbaseFeeRows_(),
     metaMaskRewards: metaMaskRewardRows_(),
@@ -528,6 +528,17 @@ function rebuildTransferLedger() {
   }
   console.log('Transfer_Ledger: ' + rows.length + ' rows');
   return rows.length;
+}
+
+/**
+ * Raw sheets are written newest first for reading; the ledger's matching wants the import order
+ * (oldest first), which is exactly the reverse. Sheets still in the old order are left as is.
+ */
+function oldestFirst_(values, dateCol) {
+  if (values.length < 3) return values;
+  const first = cellIso_(values[1][dateCol]);
+  const last = cellIso_(values[values.length - 1][dateCol]);
+  return first > last ? [values[0]].concat(values.slice(1).reverse()) : values;
 }
 
 /** Pure function (no Apps Script services) so it can be tested offline. */

@@ -111,9 +111,13 @@ function syncYnabMirror_(opts) {
     syncStep_('ynab', () => pullYnabMirror_(opts));
     combinedMirrorCache_ = null;
     syncStep_('history', () => importYnabHistory());
-    syncStep_('taekus', () => importTaekusCsvs());
-    syncStep_('fluz', () => importFluzCsvs());
-    syncStep_('blupe', () => importBlupeCsvs());
+    // One-time rewrite of the raw sheets newest-first (RAW_ORDER), then only when the CSVs change.
+    const docProps = PropertiesService.getDocumentProperties();
+    const reorder = docProps.getProperty('RAW_ORDER') !== 'newest_first';
+    syncStep_('taekus', () => importTaekusCsvs(reorder));
+    syncStep_('fluz', () => importFluzCsvs(reorder));
+    syncStep_('blupe', () => importBlupeCsvs(reorder));
+    if (reorder) docProps.setProperty('RAW_ORDER', 'newest_first');
     syncStep_('coinbase', () => {
       try { refreshCoinbaseFees(); } catch (e) { syncNotes_.push('Coinbase fees: ' + e.message); }
     });
