@@ -121,6 +121,7 @@ function ingestTaekus_(body) {
     const sh = ensureSheet_(SpreadsheetApp.getActive(), cfg.balanceSheet);
     sh.clearContents();
     sh.getRange(1, 1, 1, 4).setValues([['account_last4', 'name', 'available_balance', 'as_of']]);
+    sh.getRange(2, 1, balances.length, 1).setNumberFormat('@'); // keep the leading zero (0523)
     sh.getRange(2, 1, balances.length, 4).setValues(balances);
     sh.getRange(2, 3, balances.length, 1).setNumberFormat('$#,##0.00');
   }
