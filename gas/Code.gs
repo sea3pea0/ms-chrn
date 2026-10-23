@@ -383,75 +383,7 @@ function applyViewFormulas_() {
 }
 
 function applySummaryFormulas_() {
-  const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheets.summary);
-  const L = XFER_CFG.sheets.ledger;
-  sh.clear();
-  sh.getRange('A1').setValue('MS-CHRN Transfer Profit Summary');
-  sh.getRange('A3:F3').setValues([['Bucket', 'Transfers', 'Amount', 'Points', 'Profit', 'Avg rate']]);
-
-  const buckets = ['MS', 'MS_CRYPTO', 'BILL_PAY'];
-  buckets.forEach((b, i) => {
-    const row = 4 + i;
-    sh.getRange(row, 1).setValue(b);
-    sh.getRange(row, 2).setFormula(`=COUNTIF('${L}'!H:H,A${row})`);
-    sh.getRange(row, 3).setFormula(`=SUMIFS('${L}'!G:G,'${L}'!H:H,A${row})`);
-    sh.getRange(row, 4).setFormula(`=SUMIFS('${L}'!I:I,'${L}'!H:H,A${row})`);
-    sh.getRange(row, 5).setFormula(`=SUMIFS('${L}'!K:K,'${L}'!H:H,A${row})`);
-    sh.getRange(row, 6).setFormula(`=IFERROR(E${row}/C${row},0)`);
-  });
-  sh.getRange('A7').setValue('Total');
-  sh.getRange('B7:E7').setFormulas([['=SUM(B4:B6)', '=SUM(C4:C6)', '=SUM(D4:D6)', '=SUM(E4:E6)']]);
-  sh.getRange('F7').setFormula('=IFERROR(E7/C7,0)');
-  // Fluz load fees (card-funded Add Money) can't be tied to a transfer; they come off the total here.
-  sh.getRange('A8').setValue('Fluz load fees');
-  sh.getRange('B8').setFormula(`=COUNTIF('${L}'!H:H,"FLUZ_FEE")`);
-  sh.getRange('E8').setFormula(`=SUMIFS('${L}'!K:K,'${L}'!H:H,"FLUZ_FEE")`);
-  sh.getRange('A9').setValue('Coinbase One fees');
-  sh.getRange('B9').setFormula(`=COUNTIF('${L}'!H:H,"CRYPTO_FEE")`);
-  sh.getRange('E9').setFormula(`=SUMIFS('${L}'!K:K,'${L}'!H:H,"CRYPTO_FEE")`);
-  sh.getRange('A10').setValue('Net profit after fees');
-  sh.getRange('E10').setFormula('=E7+E8+E9');
-  sh.getRange('F10').setFormula('=IFERROR(E10/C7,0)');
-  sh.getRange('A11').setValue('Needs review');
-  sh.getRange('B11').setFormula(`=COUNTIF('${L}'!H:H,"REVIEW")+COUNTIF('${L}'!M:M,"no csv row*")`);
-  sh.getRange('C4:C10').setNumberFormat('$#,##0.00');
-  sh.getRange('D4:D10').setNumberFormat('#,##0');
-  sh.getRange('E4:E10').setNumberFormat('$#,##0.00');
-  sh.getRange('F4:F10').setNumberFormat('0.00%');
-  sh.getRange('A3:F3').setFontWeight('bold');
-  sh.getRange('A7:F7').setFontWeight('bold');
-  sh.getRange('A10:F10').setFontWeight('bold');
-  // Fluz load fees by month
-  sh.getRange('H3').setFormula(
-    `=IFERROR(QUERY('${L}'!A1:V,"select S, count(G), sum(G) where H = 'FLUZ_FEE' group by S order by S desc ` +
-    `label S 'Fluz fee month', count(G) 'charges', sum(G) 'fees'",1),"")`);
-  sh.getRange('J4:J').setNumberFormat('$#,##0.00');
-  sh.getRange('H3:J3').setFontWeight('bold');
-  // Profit by source, and Blue Penguin's actual monthly rebates next to the per-transfer estimate
-  // (estimate = interchange x Config blupe/interchange_share).
-  sh.getRange('L3:M3').setValues([['Source', 'Profit']]);
-  [['TAEKUS', 'Taekus (points)'], ['FLUZ', 'Fluz (cashback)'], ['BLUPE', 'Blue Penguin (est. interchange share)'],
-    ['UPGRADE', 'Upgrade (monthly rewards)'], ['PRIMIS', 'Primis (monthly rewards)'], ['METAMASK', 'MetaMask Card (on-chain mUSD)']]
-    .forEach((src, i) => {
-      sh.getRange(4 + i, 12).setValue(src[1]);
-      // One SUMIFS per bucket: Sheets doesn't expand an array criterion inside SUMIFS reliably.
-      sh.getRange(4 + i, 13).setFormula('=' + ['MS', 'MS_CRYPTO', 'BILL_PAY'].map((b) =>
-        `SUMIFS('${L}'!K:K,'${L}'!B:B,"${src[0]}",'${L}'!H:H,"${b}")`).join('+'));
-    });
-  sh.getRange('L10').setValue('Blue Penguin rebates received');
-  sh.getRange('M10').setFormula(`=SUMIFS('${L}'!V:V,'${L}'!H:H,"BLUPE_REBATE")`);
-  sh.getRange('M4:M10').setNumberFormat('$#,##0.00');
-  sh.getRange('L3:M3').setFontWeight('bold');
-
-  sh.getRange('A13:C13').setValues([['Sync Info', 'Value', 'Notes']]);
-  sh.getRange('A14').setValue('Last API Sync (epoch ms)');
-  sh.getRange('B14').setValue(PropertiesService.getDocumentProperties().getProperty('YNAB_LAST_SYNC_EPOCH_MS') || '');
-  sh.getRange('A15').setValue('Server Knowledge');
-  sh.getRange('B15').setValue(PropertiesService.getDocumentProperties().getProperty('YNAB_SERVER_KNOWLEDGE') || '');
-  sh.getRange('A16').setValue('Sync Cooldown Minutes');
-  sh.getRange('B16').setFormula(`=IFERROR(VLOOKUP("sync_min_minutes",FILTER(${CFG.sheets.config}!B:C,${CFG.sheets.config}!A:A="sync"),2,FALSE),20)`);
-
-  sh.setFrozenRows(3);
+  writeSummary_(); // SummaryDash.gs
 }
 
 function isWithinSyncCooldown_() {
