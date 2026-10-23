@@ -5,7 +5,8 @@
  *      before, all time; split MS / MS-Crypto / Bill Pay, with Fluz load fees on their own.
  *      Per-transfer fees (split fees, on-ramp fees) are already inside each bucket's profit;
  *      Coinbase One fees come off MS-Crypto.
- *   2. Targets active in the last 30 days, with their cash back minus fees, and an estimate of
+ *   2. Targets active in the last 30 days, with their cash back minus fees, the current rate (the
+ *      newest transfer whose cash back has posted, minus its fees), and an estimate of
  *      the next load: the target's usual gap between load days and usual amount per load day,
  *      both medians over the last 90 days.
  *   3. Profit by source (all time) and how many ledger rows need review.
@@ -32,7 +33,7 @@ function buildSummaryData_(ledger, todayIso, tz) {
     if (!iso) return;
     rows.push({
       iso: iso, bucket: String(r[h.bucket]), source: String(r[h.source]), amount: toNumber_(r[h.amount]),
-      profit: toNumber_(r[h.profit]), target: String(r[h.target_group] || r[h.target] || '').trim(),
+      profit: toNumber_(r[h.profit]), fee: toNumber_(r[h.fee]), target: String(r[h.target_group] || r[h.target] || '').trim(),
       match: String(r[h.match] || '')
     });
   });
@@ -87,6 +88,8 @@ function buildSummaryData_(ledger, todayIso, tz) {
       t.byBucket[r.bucket] = (t.byBucket[r.bucket] || 0) + r.amount;
     }
     if (age < SUMMARY_CFG.patternDays) t.pattern[r.iso] = (t.pattern[r.iso] || 0) + r.amount;
+    // Current rate: newest transfer whose cash back / points have posted (gross > 0), net of fees.
+    if (r.amount > 0 && r.profit + r.fee > 0 && (!t.latest || r.iso >= t.latest.iso)) t.latest = r;
   });
   const median = (a) => {
     if (!a.length) return null;
@@ -113,8 +116,9 @@ function buildSummaryData_(ledger, todayIso, tz) {
       const due = isoDays_(last) + Math.max(1, Math.round(gap));
       next = isoOf(Math.max(due, today));
     }
+    const cur = o.latest ? o.latest.profit / o.latest.amount : '';
     return [t, SUMMARY_CFG.labels[group] || group, o.recent.length, r2(spend), r2(net), spend ? net / spend : 0,
-      last, next, amt === null ? '' : r2(amt), gap === null ? '' : Math.round(gap * 10) / 10];
+      cur, o.latest ? o.latest.iso : '', last, next, amt === null ? '' : r2(amt), gap === null ? '' : Math.round(gap * 10) / 10];
   }).sort((a, b) => b[4] - a[4]);
 
   const bySource = SUMMARY_CFG.sources.map((s) => [s[1], r2(rows
@@ -132,7 +136,7 @@ function writeSummary_() {
     Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), tz);
   const C = SUMMARY_CFG.colors;
   const money = '$#,##0.00;[Red]-$#,##0.00';
-  const W = 10;
+  const W = 12;
 
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
   sh.clear();
@@ -176,23 +180,25 @@ function writeSummary_() {
   // 2. Active targets + next load
   row = p0 + data.periods.length + 2;
   section(row, 'Targets active in the last 30 days');
-  header(row + 1, ['Target', 'Group', 'Transfers', 'Spend', 'Cash back − fees', 'Net rate', 'Last load',
-    'Next load (est.)', 'Est. amount', 'Usual gap (days)']);
+  header(row + 1, ['Target', 'Group', 'Transfers', 'Spend', 'Cash back − fees', 'Net rate (30d)', 'Current rate',
+    'Rate as of', 'Last load', 'Next load (est.)', 'Est. amount', 'Usual gap (days)']);
   const a0 = row + 2;
   if (data.active.length) {
-    sh.getRange(a0, 1, data.active.length, 10).setValues(data.active);
+    sh.getRange(a0, 1, data.active.length, 12).setValues(data.active);
     sh.getRange(a0, 4, data.active.length, 2).setNumberFormat(money);
-    sh.getRange(a0, 6, data.active.length, 1).setNumberFormat('0.00%');
-    sh.getRange(a0, 7, data.active.length, 2).setNumberFormat('@').setHorizontalAlignment('center');
-    sh.getRange(a0, 9, data.active.length, 1).setNumberFormat('$#,##0');
-    sh.getRange(a0, 10, data.active.length, 1).setHorizontalAlignment('center');
-    band(a0, data.active.length, 10);
-    sh.getRange(a0, 8, data.active.length, 2).setFontWeight('bold').setFontColor('#1a7f37');
+    sh.getRange(a0, 6, data.active.length, 2).setNumberFormat('0.00%;[Red]-0.00%');
+    sh.getRange(a0, 7, data.active.length, 1).setFontWeight('bold');
+    sh.getRange(a0, 8, data.active.length, 3).setNumberFormat('@').setHorizontalAlignment('center');
+    sh.getRange(a0, 11, data.active.length, 1).setNumberFormat('$#,##0');
+    sh.getRange(a0, 12, data.active.length, 1).setHorizontalAlignment('center');
+    band(a0, data.active.length, 12);
+    sh.getRange(a0, 10, data.active.length, 2).setFontWeight('bold').setFontColor('#1a7f37');
   }
   const aEnd = a0 + Math.max(data.active.length, 1);
   sh.getRange(aEnd, 1, 1, W).merge()
     .setValue('Next load: last load day + the target\'s median gap between load days; amount: its median ' +
-      'total per load day (both over the last 90 days). A date of today means it is due now.')
+      'total per load day (both over the last 90 days). A date of today means it is due now. Current rate: the ' +
+      'newest transfer whose cash back has posted, minus its fees.')
     .setFontColor('#666666').setFontStyle('italic').setWrap(true);
   sh.setRowHeight(aEnd, 30);
 
