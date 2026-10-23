@@ -200,7 +200,7 @@ function arrangeSheets_() {
   const order = [
     CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet, BONUS_CFG.sheet,
     XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, INGEST.taekus.balanceSheet, XFER_CFG.sheets.fluzRaw,
-    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet, CB_CFG.balanceSheet, MM_CFG.sheet,
+    XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet, CB_CFG.balanceSheet, MM_CFG.sheet, SOL_CFG.sheet,
     CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
   ];
   let pos = 1;
@@ -507,6 +507,7 @@ function rebuildTransferLedger() {
     blupeStatements: ss.getSheetByName(XFER_CFG.sheets.blupeStatements).getDataRange().getValues(),
     coinbaseFees: coinbaseFeeRows_(),
     metaMaskRewards: metaMaskRewardRows_(),
+    solanaDeposits: solanaDepositRows_(),
     overrides: ss.getSheetByName(XFER_CFG.sheets.overrides).getDataRange().getValues(),
     cfg: xferConfig_(),
     tz: ss.getSpreadsheetTimeZone()
@@ -1152,6 +1153,35 @@ function buildTransferLedgerRows_(input) {
       'rebate received', '', '', t.id, t.memo, '', t.iso.slice(0, 7), 'Blue Penguin', 0, t.inflow
     ]);
   });
+
+  // On-ramp fees (MoonPay into the Solana wallets): what the purchase cost minus the stablecoin
+  // that arrived, matched within a day and 3%; subtracted from that purchase's cash back.
+  const deps = (input.solanaDeposits || []).filter((d) => d.date && d.amount > 0)
+    .map((d) => Object.assign({ day: isoDays_(d.date), used: false }, d));
+  if (deps.length) {
+    out.forEach((r) => {
+      if (r[7] !== 'MS_CRYPTO' || !/moonpay/i.test([r[3], r[4], r[13]].join(' ')) || !(r[6] > 0)) return;
+      // Closer of the YNAB date (a local-midnight Date from isoToDate_) and the bank (CSV) date.
+      const ymd = (dt) => dt.getFullYear() + '-' + ('0' + (dt.getMonth() + 1)).slice(-2) + '-' + ('0' + dt.getDate()).slice(-2);
+      const days = [isoDays_(ymd(r[0]))];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[14]))) days.push(isoDays_(String(r[14])));
+      let best = null;
+      deps.forEach((d) => {
+        const gap = r[6] - d.amount;
+        const dd = Math.min.apply(null, days.map((x) => Math.abs(d.day - x)));
+        if (d.used || gap < 0 || gap > r[6] * 0.03 || dd > 1) return;
+        const score = dd * 1000 + gap;
+        if (!best || score < best.score) best = { d: d, score: score, gap: gap };
+      });
+      if (!best) return;
+      best.d.used = true;
+      const fee = Math.round(best.gap * 100) / 100;
+      r[20] = Math.round(((r[20] || 0) + fee) * 100) / 100;
+      r[10] = Math.round((r[10] - fee) * 100) / 100;
+      r[11] = r[6] ? r[10] / r[6] : 0;
+      r[17] = (r[17] ? r[17] + '; ' : '') + 'on-ramp fee $' + fee.toFixed(2) + ' (' + best.d.amount + ' arrived)';
+    });
+  }
 
   out.sort((a, b) => b[0] - a[0]);
   return out;

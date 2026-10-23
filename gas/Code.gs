@@ -124,6 +124,9 @@ function syncYnabMirror_(opts) {
     syncStep_('metamask', () => {
       try { const n = refreshMetaMaskRewards(); if (n) syncNotes_.push('MetaMask +' + n); } catch (e) { syncNotes_.push('MetaMask: ' + e.message); }
     });
+    syncStep_('solana', () => {
+      try { const n = refreshSolanaDeposits(); if (n) syncNotes_.push('Solana +' + n); } catch (e) { syncNotes_.push('Solana: ' + e.message); }
+    });
     syncStep_('ledger', () => rebuildTransferLedger());
     syncStep_('targets', () => {
       if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet) &&
