@@ -1,10 +1,10 @@
 /**
  * Summary sheet: recent-first view of cash back minus fees.
  *
- *   1. Cash back minus fees by period: month to date, last month, year to date, the three years
- *      before, all time; split MS / MS-Crypto / Bill Pay, with Fluz load fees on their own.
- *      Per-transfer fees (split fees, on-ramp fees) are already inside each bucket's profit;
- *      Coinbase One fees come off MS-Crypto.
+ *   1. Cash back minus fees by period: month to date, each earlier month of this year, year to
+ *      date, last year, all time; split MS / MS-Crypto / Bill Pay, with Coinbase One and Fluz load
+ *      fees in their own columns. Per-transfer fees (split fees, on-ramp fees) are already inside
+ *      each bucket's profit.
  *   2. Targets active in the last 30 days, with their cash back minus fees, the current rate (the
  *      newest transfer whose cash back has posted, minus its fees), and an estimate of
  *      the next load: the target's usual gap between load days and usual amount per load day,
@@ -46,18 +46,17 @@ function buildSummaryData_(ledger, todayIso, tz) {
   })();
   const monthName = (m) => ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][
     Number(m.slice(5, 7)) - 1] + ' ' + m.slice(0, 4);
-  const periods = [
-    { label: 'Month to date (' + monthName(ym) + ')', test: (iso) => iso.slice(0, 7) === ym },
-    { label: 'Last month (' + monthName(lastMonth) + ')', test: (iso) => iso.slice(0, 7) === lastMonth },
-    { label: 'Year to date (' + y + ')', test: (iso) => iso.slice(0, 4) === String(y) },
-    { label: String(y - 1), test: (iso) => iso.slice(0, 4) === String(y - 1) },
-    { label: String(y - 2), test: (iso) => iso.slice(0, 4) === String(y - 2) },
-    { label: String(y - 3), test: (iso) => iso.slice(0, 4) === String(y - 3) },
-    { label: 'All time', test: () => true }
-  ];
+  const periods = [{ label: 'Month to date (' + monthName(ym) + ')', test: (iso) => iso.slice(0, 7) === ym }];
+  for (let m = Number(todayIso.slice(5, 7)) - 1; m >= 1; m -= 1) {
+    const key = y + '-' + ('0' + m).slice(-2);
+    periods.push({ label: monthName(key), test: (iso) => iso.slice(0, 7) === key });
+  }
+  periods.push({ label: 'Year to date (' + y + ')', test: (iso) => iso.slice(0, 4) === String(y), strong: true });
+  periods.push({ label: String(y - 1), test: (iso) => iso.slice(0, 4) === String(y - 1), strong: true });
+  periods.push({ label: 'All time', test: () => true, strong: true });
   const r2 = (x) => Math.round(x * 100) / 100;
   const periodRows = periods.map((p) => {
-    const v = { MS: 0, MS_CRYPTO: 0, BILL_PAY: 0, fluzFees: 0, spend: 0, transfers: 0 };
+    const v = { MS: 0, MS_CRYPTO: 0, BILL_PAY: 0, cbOne: 0, fluzFees: 0, spend: 0, transfers: 0 };
     rows.forEach((r) => {
       if (!p.test(r.iso)) return;
       if (SUMMARY_CFG.buckets.indexOf(r.bucket) >= 0) {
@@ -65,13 +64,13 @@ function buildSummaryData_(ledger, todayIso, tz) {
         v.spend += r.amount;
         v.transfers += 1;
       } else if (r.bucket === 'CRYPTO_FEE') {
-        v.MS_CRYPTO += r.profit; // Coinbase One subscription (negative)
+        v.cbOne += r.profit; // Coinbase One subscription (negative)
       } else if (r.bucket === 'FLUZ_FEE') {
         v.fluzFees += r.profit;
       }
     });
-    const total = v.MS + v.MS_CRYPTO + v.BILL_PAY + v.fluzFees;
-    return [p.label, r2(v.MS), r2(v.MS_CRYPTO), r2(v.BILL_PAY), r2(v.fluzFees), r2(total), r2(v.spend),
+    const total = v.MS + v.MS_CRYPTO + v.cbOne + v.BILL_PAY + v.fluzFees;
+    return [p.label, r2(v.MS), r2(v.MS_CRYPTO), r2(v.cbOne), r2(v.BILL_PAY), r2(v.fluzFees), r2(total), r2(v.spend),
       v.spend ? total / v.spend : 0, v.transfers];
   });
 
@@ -125,7 +124,7 @@ function buildSummaryData_(ledger, todayIso, tz) {
     .filter((r) => r.source === s[0] && SUMMARY_CFG.buckets.indexOf(r.bucket) >= 0)
     .reduce((x, r) => x + r.profit, 0))]);
   const review = rows.filter((r) => r.bucket === 'REVIEW' || /^no csv row/.test(r.match)).length;
-  return { periods: periodRows, active: active, bySource: bySource, review: review };
+  return { periods: periodRows, strong: periods.map((p) => !!p.strong), active: active, bySource: bySource, review: review };
 }
 
 function writeSummary_() {
@@ -165,17 +164,23 @@ function writeSummary_() {
   // 1. Periods
   let row = 4;
   section(row, 'Cash back minus fees');
-  header(row + 1, ['Period', 'MS', 'MS-Crypto', 'Bill Pay', 'Fluz load fees', 'Total', 'Spend', 'Net rate', 'Transfers']);
+  header(row + 1, ['Period', 'MS', 'MS-Crypto', 'Coinbase One', 'Bill Pay', 'Fluz load fees', 'Total', 'Spend',
+    'Net rate', 'Transfers']);
   const p0 = row + 2;
-  sh.getRange(p0, 1, data.periods.length, 9).setValues(data.periods);
-  sh.getRange(p0, 2, data.periods.length, 6).setNumberFormat(money);
-  sh.getRange(p0, 8, data.periods.length, 1).setNumberFormat('0.00%');
-  sh.getRange(p0, 9, data.periods.length, 1).setNumberFormat('#,##0');
-  band(p0, data.periods.length, 9);
-  sh.getRange(p0, 6, data.periods.length, 1).setFontWeight('bold');
-  sh.getRange(p0, 1, 2, 9).setFontWeight('bold'); // month to date, last month
-  sh.getRange(p0 + data.periods.length - 1, 1, 1, 9).setFontWeight('bold')
-    .setBorder(true, null, null, null, null, null, '#999999', SpreadsheetApp.BorderStyle.SOLID);
+  const n = data.periods.length;
+  sh.getRange(p0, 1, n, 10).setValues(data.periods);
+  sh.getRange(p0, 2, n, 7).setNumberFormat(money);
+  sh.getRange(p0, 9, n, 1).setNumberFormat('0.00%');
+  sh.getRange(p0, 10, n, 1).setNumberFormat('#,##0');
+  band(p0, n, 10);
+  sh.getRange(p0, 7, n, 1).setFontWeight('bold');
+  sh.getRange(p0, 1, 1, 10).setFontWeight('bold'); // month to date
+  const firstStrong = data.strong.indexOf(true);
+  data.strong.forEach((st, i) => { if (st) sh.getRange(p0 + i, 1, 1, 10).setFontWeight('bold').setBackground(C.header); });
+  if (firstStrong > 0) {
+    sh.getRange(p0 + firstStrong, 1, 1, 10)
+      .setBorder(true, null, null, null, null, null, '#999999', SpreadsheetApp.BorderStyle.SOLID);
+  }
 
   // 2. Active targets + next load
   row = p0 + data.periods.length + 2;
