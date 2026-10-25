@@ -156,13 +156,17 @@ function pullYnabMirror_(opts) {
   const header = mirrorSheet.getRange(1, 1, 1, CFG.mirrorHeaders.length).getValues()[0];
   const stale = CFG.mirrorHeaders.some((h, i) => String(header[i]) !== h);
   mirrorSheet.getRange(1, 1, 1, CFG.mirrorHeaders.length).setValues([CFG.mirrorHeaders]);
-  const full = opts.force || !lastKnowledge || stale;
+  // MIRROR_REBUILT: one full refetch to clear rows left behind by an older upsert bug (updates
+  // written after deletes had shifted the rows), which showed up as duplicate ledger rows.
+  const rebuild = props.getProperty('MIRROR_REBUILT') !== '2026-10-25';
+  const full = opts.force || !lastKnowledge || stale || rebuild;
 
   const txData = fetchYnabTransactions_(token, budgetId, full ? 0 : lastKnowledge);
   const catGroups = fetchYnabCategoryGroups_(token, budgetId);
   upsertMirrorTransactions_(txData.transactions || [], accountMap, full, catGroups);
 
   props.setProperty('YNAB_SERVER_KNOWLEDGE', String(txData.server_knowledge || 0));
+  if (rebuild) props.setProperty('MIRROR_REBUILT', '2026-10-25');
   props.setProperty('YNAB_LAST_SYNC_EPOCH_MS', String(Date.now()));
   props.setProperty('YNAB_LAST_SYNC_CALLER', String(opts.calledBy || 'unknown'));
 }
@@ -254,14 +258,16 @@ function upsertMirrorTransactions_(transactions, accountMap, replaceAll, catGrou
   const txnCol = headerMap.txn_id;
 
   const rowByTxn = {};
+  const deletes = [];
   for (let i = 1; i < values.length; i += 1) {
     const id = String(values[i][txnCol] || '').trim();
-    if (id) rowByTxn[id] = i + 1;
+    if (!id) continue;
+    if (rowByTxn[id]) deletes.push(rowByTxn[id]); // stale duplicate: keep the later row
+    rowByTxn[id] = i + 1;
   }
 
   const updates = [];
   const appends = [];
-  const deletes = [];
 
   transactions.forEach((t) => {
     const id = String(t.id || '');
@@ -293,11 +299,11 @@ function upsertMirrorTransactions_(transactions, accountMap, replaceAll, catGrou
     return;
   }
 
-  deletes.sort((a, b) => b - a).forEach((rowNum) => sh.deleteRow(rowNum));
-
+  // Update first: deleting rows shifts the row numbers the updates point at.
   updates.forEach((u) => {
     sh.getRange(u.row, 1, 1, CFG.mirrorHeaders.length).setValues([u.values]);
   });
+  Array.from(new Set(deletes)).sort((a, b) => b - a).forEach((rowNum) => sh.deleteRow(rowNum));
 
   if (appends.length) {
     sh.getRange(sh.getLastRow() + 1, 1, appends.length, CFG.mirrorHeaders.length).setValues(appends);
