@@ -109,6 +109,9 @@ function syncYnabMirror_(opts) {
     }
 
     syncStep_('ynab', () => pullYnabMirror_(opts));
+    syncStep_('transfers', () => {
+      try { const r = fixTkbMoliTransfers_(); r.notes.forEach((n) => syncNotes_.push(n)); } catch (e) { syncNotes_.push('Transfer fixer: ' + e.message); }
+    });
     combinedMirrorCache_ = null;
     syncStep_('history', () => importYnabHistory());
     // One-time rewrite of the raw sheets newest-first (RAW_ORDER), then only when the CSVs change.
