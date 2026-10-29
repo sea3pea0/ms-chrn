@@ -30,6 +30,7 @@ function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
+    try { ensureAllTriggers(); } catch (err) { console.warn('ensureAllTriggers: ' + err); }
     if (body.site === 'taekus') return ingestJson_(Object.assign({ ok: true }, ingestTaekus_(body)));
     return ingestJson_({ ok: false, error: 'unknown site ' + body.site });
   } catch (err) {

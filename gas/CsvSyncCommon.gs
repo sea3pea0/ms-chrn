@@ -200,3 +200,21 @@ function csvSyncYnab_() {
     }
   };
 }
+
+/**
+ * Recreate any missing hourly trigger (Google drops them when it revokes the script's access,
+ * e.g. after a password change). Runs on every extension post and manual sync, so re-authorizing
+ * once brings everything back. Run it by hand from the editor too.
+ */
+function ensureAllTriggers() {
+  const have = new Set(ScriptApp.getProjectTriggers().map((t) => t.getHandlerFunction()));
+  const want = [{ fn: XFER_CFG.triggerFn, minute: XFER_CFG.triggerMinute }].concat(CSV_SYNC_TRIGGERS);
+  const made = [];
+  want.forEach((t) => {
+    if (have.has(t.fn)) return;
+    ScriptApp.newTrigger(t.fn).timeBased().everyHours(1).nearMinute(t.minute).create();
+    made.push(t.fn);
+  });
+  if (made.length) console.log('Recreated triggers: ' + made.join(', '));
+  return made;
+}

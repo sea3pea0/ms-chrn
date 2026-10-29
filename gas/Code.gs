@@ -38,6 +38,7 @@ function setupWorkbook() {
 }
 
 function syncYnabMirrorOnDemand() {
+  ensureAllTriggers();
   syncYnabMirror_({ force: false, calledBy: 'manual' });
 }
 
