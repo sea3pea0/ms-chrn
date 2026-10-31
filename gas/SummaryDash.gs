@@ -62,7 +62,7 @@ function buildSummaryData_(ledger, todayIso, tz) {
       if (SUMMARY_CFG.buckets.indexOf(r.bucket) >= 0) {
         v[r.bucket] += r.profit;
         v.spend += r.amount;
-        v.transfers += 1;
+        if (r.amount > 0) v.transfers += 1; // fee-only rows (swap fees) aren't transfers
       } else if (r.bucket === 'CRYPTO_FEE') {
         v.cbOne += r.profit; // Coinbase One subscription (negative)
       } else if (r.bucket === 'FLUZ_FEE') {

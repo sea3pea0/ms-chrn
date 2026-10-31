@@ -1096,6 +1096,19 @@ function buildTransferLedgerRows_(input) {
       -usd, String(r.id || ''), '', r.type === 'subscription' ? 'paid in ' + (r.currency || 'USDC') : 'rebate');
   });
 
+  // Swap fees (e.g. xoUSD -> USDC swapped outside Exodus): YNAB lines with payee "Swap Fee" are an
+  // MS-Crypto cost with no transfer of their own (amount 0, profit = -fee).
+  txns.forEach((t) => {
+    if (t.dstId || t.iso < mirrorMin || !/^swap fee$/i.test(t.payee)) return;
+    const fee = t.outflow - t.inflow;
+    if (!fee) return;
+    out.push([
+      isoToDate_(t.iso), last4ById[t.accountId] || 'SWAP', t.account, t.payee, 'Swap fee', '', 0, 'MS_CRYPTO', 0, '',
+      -Math.round(fee * 100) / 100, 0, 'swap fee', '', '', t.id, t.memo, 'swap loss (fees + spread)', t.iso.slice(0, 7),
+      targetGroup_([t.account], aliases) || 'Swap fee', Math.round(fee * 100) / 100, 0
+    ]);
+  });
+
   // Deposit-allocated sources (Upgrade, Primis): monthly reward / that month's tracked transfers.
   if (depSrc.length) {
     const monNames = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8,

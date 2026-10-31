@@ -56,7 +56,8 @@ const EXODUS_SYNC = {
   moonpayWaitDays: 5,
   moonpayChargeRx: /moonpay/i,
   // One-off bookings by signature prefix: xoUSD sent straight to a wallet and swapped there, so the
-  // swap loss (fees + spread, traced on-chain) is its own line next to the USDC that arrived.
+  // swap loss (fees + spread, traced on-chain) is its own "Swap Fee" line next to the USDC that arrived;
+  // the tracker counts Swap Fee lines as an MS-Crypto cost.
   splitSends: {
     '34b6iDkC': { usdc: 2973103.794, note: 'swapped on Jupiter 10-29 (2XSon3xT), USDC to EwgFJ3DB' }
   }
@@ -317,12 +318,14 @@ function exodusSync_(apply) {
         if (l.category) t.category_id = l.category;
         const sp = Object.keys(C.splitSends).find((k) => l.sig && l.sig.indexOf(k) === 0);
         if (sp && l.amount < 0) {
+          // Two lines (not a YNAB split) so the tracker sees the Swap Fee line on its own.
           const usdc = -cents_(Math.round(C.splitSends[sp].usdc));
-          t.subtransactions = [
-            { amount: usdc, payee_name: 'USDC Transfer', category_id: l.category, memo: 'USDC received after swap' },
-            { amount: l.amount - usdc, payee_name: 'Swap Fee', memo: cut_('xoUSD -> USDC swap loss (fees + spread); ' + C.splitSends[sp].note, 200) }
-          ];
-          delete t.category_id;
+          t.amount = usdc;
+          posts.push(t);
+          posts.push({ account_id: acct.id, date: l.date, amount: l.amount - usdc, payee_name: 'Swap Fee',
+            memo: cut_('xoUSD -> USDC swap loss (fees + spread); ' + C.splitSends[sp].note + ' | ' + l.key, 200),
+            cleared: 'cleared', approved: false });
+          return;
         }
         posts.push(t);
       });
