@@ -28,7 +28,9 @@
 const EXODUS_SYNC = {
   wallets: [
     { wallet: 'GUDLWMBi1uH1vMwi3MMgmLEr8WwHWmvfy3tdeQzVQ4Dh', account: 'EXOD - 6388 - P2',
-      funding: ['TKB - 5427 - P2'] }
+      funding: ['TKB - 5427 - P2'] },
+    { wallet: '2RE25szgdsh9Hryk8bjaj621EKsEsmnh29E9J4LAGzut', account: 'EXOD - 6249 - P1',
+      funding: ['TKB - 0523 - P1'] }
   ],
   syncStart: '2026-10-01',
   driveFolderName: 'Exodus Transaction CSVs',
