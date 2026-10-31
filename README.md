@@ -71,6 +71,14 @@ drop Exodus activity exports into Drive **Exodus Transaction CSVs** and unapprov
 Lines are created unapproved, one at a time, with memo `XO <signature prefix>` for dedupe.
 `exodusSyncDryRun()` logs the plan without writing.
 
+## TUYO -> YNAB (on-chain, Base)
+
+`gas/TuyoSync.gs` reads USDC transfers of the TUYO smart wallets on Base (public RPC, hourly ~:52). Loads from
+the TUYO on-ramp become transfers from the funding TKB/TKP account (the bank charge is converted when it is in
+YNAB); sends to the owner's MetaMask card wallet are `USDC Transfer` / `Transfer: USDC`. Moves to the card
+collateral contract or the Aave vault stay inside TUYO and are skipped. Card spends and cash back settle
+off-chain, so they still come from the connector or by hand. `tuyoSyncDryRun()` logs the plan.
+
 ## Taekus -> YNAB reconciliation
 
 The Taekus bank connection in YNAB drops transactions now and then. `scripts/taekus_sync.py` (cron hourly at :37
