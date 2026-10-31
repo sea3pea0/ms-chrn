@@ -4,13 +4,14 @@
  * YNAB_BUDGET_ID (shared with Code.gs).
  *
  * Triggers: run installCsvSyncTriggers() once (Fluz hourly ~:17, Blue Penguin
- * hourly ~:47). removeCsvSyncTriggers() takes them out again.
+ * hourly ~:47, Exodus on-chain sync hourly ~:57). removeCsvSyncTriggers() takes them out again.
  */
 
 const CSV_SYNC_YNAB_BASE = 'https://api.ynab.com/v1';
 const CSV_SYNC_TRIGGERS = [
   { fn: 'fluzSyncApply', minute: 17 },
-  { fn: 'blupeSyncApply', minute: 47 }
+  { fn: 'blupeSyncApply', minute: 47 },
+  { fn: 'exodusSyncApply', minute: 57 }
 ];
 
 function installCsvSyncTriggers() {

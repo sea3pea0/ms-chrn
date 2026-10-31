@@ -60,6 +60,17 @@ Fixes: put a YNAB txn id in `Transfer_Overrides` with a bucket and/or points. Pa
 importers (they write to YNAB, not to the workbook); `installCsvSyncTriggers()` schedules them. The same jobs
 also run as Python cron scripts on pea-docker (`scripts/fluz_sync.py`, `scripts/blupe_sync.py`).
 
+## Exodus -> YNAB (on-chain)
+
+`gas/ExodusSync.gs` books every dollar-stablecoin (xoUSD / USDC) movement of the Exodus Solana wallets into
+their YNAB EXOD accounts (P2: `GUDLWMBi...` -> `EXOD - 6388 - P2`), hourly at ~:57 with the other CSV syncs.
+It reads the chain (public Solana RPC), so no export is needed. MoonPay deliveries -> payee MoonPay,
+category `Transfer: MoonPay`; Exodus sends (xoUSD swapped and sent out as USDC) -> payee `USDC Transfer`,
+category `Transfer: USDC`; Exodus Pay card pulls -> merchant payee, uncategorized. Merchants are not on-chain:
+drop Exodus activity exports into Drive **Exodus Transaction CSVs** and unapproved card lines get the merchant.
+Lines are created unapproved, one at a time, with memo `XO <signature prefix>` for dedupe.
+`exodusSyncDryRun()` logs the plan without writing.
+
 ## Taekus -> YNAB reconciliation
 
 The Taekus bank connection in YNAB drops transactions now and then. `scripts/taekus_sync.py` (cron hourly at :37
