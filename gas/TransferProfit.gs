@@ -174,6 +174,11 @@ const XFER_CFG = {
     // MetaMask Card: rewards are paid on-chain in mUSD (MetaMask_Rewards sheet), not seen by YNAB.
     { key: 'METAMASK', accountRegex: '^MMCA\\b', external: 'metaMaskRewards', lagMonths: 0 }
   ],
+  // Swap losses after money left a tracked account (traced on-chain); shown on the sheet only.
+  swapFees: [
+    { date: '2026-10-29', account: 'EXOD - 6249 - P1', fee: 4.64,
+      note: '2,977.74 xoUSD sent to own wallet AoXX..., swapped on Jupiter to 2,973.10 USDC (tx 2XSon3xT)' }
+  ],
   triggerFn: 'syncYnabMirrorScheduled',
   triggerMinute: 32
 };
@@ -1096,16 +1101,13 @@ function buildTransferLedgerRows_(input) {
       -usd, String(r.id || ''), '', r.type === 'subscription' ? 'paid in ' + (r.currency || 'USDC') : 'rebate');
   });
 
-  // Swap fees (e.g. xoUSD -> USDC swapped outside Exodus): YNAB lines with payee "Swap Fee" are an
-  // MS-Crypto cost with no transfer of their own (amount 0, profit = -fee).
-  txns.forEach((t) => {
-    if (t.dstId || t.iso < mirrorMin || !/^swap fee$/i.test(t.payee)) return;
-    const fee = t.outflow - t.inflow;
-    if (!fee) return;
+  // Swap fees incurred after money left a tracked account (e.g. xoUSD swapped to USDC in an outside
+  // wallet): a cost on the sheet only, not in YNAB. Rows from XFER_CFG.swapFees (amount 0, profit = -fee).
+  XFER_CFG.swapFees.forEach((f) => {
     out.push([
-      isoToDate_(t.iso), last4ById[t.accountId] || 'SWAP', t.account, t.payee, 'Swap fee', '', 0, 'MS_CRYPTO', 0, '',
-      -Math.round(fee * 100) / 100, 0, 'swap fee', '', '', t.id, t.memo, 'swap loss (fees + spread)', t.iso.slice(0, 7),
-      targetGroup_([t.account], aliases) || 'Swap fee', Math.round(fee * 100) / 100, 0
+      isoToDate_(f.date), 'SWAP', f.account, 'Swap fee', 'Swap fee', '', 0, 'MS_CRYPTO', 0, '',
+      -f.fee, 0, 'swap fee', '', '', '', f.note, 'swap loss (fees + spread)', f.date.slice(0, 7),
+      targetGroup_([f.account], aliases) || 'Swap fee', f.fee, 0
     ]);
   });
 
