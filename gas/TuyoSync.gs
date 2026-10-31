@@ -20,7 +20,8 @@ const TUYO_SYNC = {
   rpc: 'https://base-rpc.publicnode.com',
   usdc: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
   transferTopic: '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef',
-  onramps: [], // full addresses filled in below (TUYO on-ramp EOA)
+  // USDC from these is a load (TUYO's on-ramp EOA).
+  onramps: ['0x4c2c0f0bb2631b02ac9299c59690914ee7a200b8'],
   wallets: [
     { wallet: '0xdaaf40e1155b02d5aae5af1a1f1d943e47df2ebf', account: 'TUYO - 4382 - P2',
       funding: 'TKB - 5427 - P2', mmca: '0x71648abb5dbdc13290de3d50ef11578869fdd046' },

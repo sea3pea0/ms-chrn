@@ -54,7 +54,12 @@ const EXODUS_SYNC = {
   moonpayDaysAfter: 4,
   moonpayMaxCut: 0.03,
   moonpayWaitDays: 5,
-  moonpayChargeRx: /moonpay/i
+  moonpayChargeRx: /moonpay/i,
+  // One-off bookings by signature prefix: xoUSD sent straight to a wallet and swapped there, so the
+  // swap loss (fees + spread, traced on-chain) is its own line next to the USDC that arrived.
+  splitSends: {
+    '34b6iDkC': { usdc: 2973103.794, note: 'swapped on Jupiter 10-29 (2XSon3xT), USDC to EwgFJ3DB' }
+  }
 };
 
 function exodusSyncDryRun() {
@@ -310,6 +315,15 @@ function exodusSync_(apply) {
         const t = { account_id: acct.id, date: l.date, amount: l.amount, payee_name: l.payee,
           memo: l.memo, cleared: 'cleared', approved: false };
         if (l.category) t.category_id = l.category;
+        const sp = Object.keys(C.splitSends).find((k) => l.sig && l.sig.indexOf(k) === 0);
+        if (sp && l.amount < 0) {
+          const usdc = -cents_(Math.round(C.splitSends[sp].usdc));
+          t.subtransactions = [
+            { amount: usdc, payee_name: 'USDC Transfer', category_id: l.category, memo: 'USDC received after swap' },
+            { amount: l.amount - usdc, payee_name: 'Swap Fee', memo: cut_('xoUSD -> USDC swap loss (fees + spread); ' + C.splitSends[sp].note, 200) }
+          ];
+          delete t.category_id;
+        }
         posts.push(t);
       });
       const res = y.postTransactions(posts);
