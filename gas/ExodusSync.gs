@@ -20,7 +20,8 @@
  *
  * Card merchants are not on-chain. If the Drive folder "Exodus Transaction CSVs" holds Exodus
  * activity exports, CARD_PAYMENT rows give the merchant and card amount by on-chain id; a card
- * line created before its export arrived is renamed while it is still unapproved.
+ * line created before its export arrived is renamed while it is still unapproved. Exodus's card
+ * fee (on-chain pull minus merchant amount) is left for Chris to split by hand.
  *
  * Entry points: exodusSyncDryRun() (log only), exodusSyncApply() (hourly trigger ~:57).
  */
@@ -167,12 +168,6 @@ function exodusLine_(m, cards, catIds) {
     l.payee = info && info.merchant ? exodusMerchantPayee_(info.merchant) : C.cardPlaceholder;
     l.memo = l.key + ' - Exodus Pay card' + (info ? ' $' + info.amount + ' ' + info.merchant : '') + ' - ' + m.time;
     l.card = true;
-    // The export gives the merchant amount; the rest of what was pulled on-chain is Exodus's fee.
-    const merch = info ? cents_(milli_(info.amount)) * (m.amount < 0 ? -1 : 1) : 0;
-    if (merch && Math.abs(m.amount - merch) > 0 && Math.abs(m.amount - merch) <= Math.abs(merch) * 0.02) {
-      l.fee = m.amount - merch;
-      l.amount = merch;
-    }
   } else if (m.amount > 0 && C.moonpayOwners.has(m.counterparty)) {
     l.payee = 'MoonPay'; l.category = catIds.moonpay; l.moonpay = true;
     l.memo = l.key + ' - MoonPay xoUSD - ' + m.time;
@@ -191,11 +186,6 @@ function exodusLine_(m, cards, catIds) {
 function exodusHasSigRef_(memo) {
   return (String(memo || '').match(/[1-9A-HJ-NP-Za-km-z]{8,}/g) || [])
     .some((w) => /\d/.test(w) && /[A-Z]/.test(w) && /[a-z]/.test(w));
-}
-
-function exodusCardFeeTxn_(accountId, date, fee, key) {
-  return { account_id: accountId, date: date, amount: fee, payee_name: 'Exodus Pay',
-    memo: cut_('Exodus Pay fee (on-chain pull minus merchant amount) | ' + key, 200), cleared: 'cleared', approved: false };
 }
 
 /** The funding-account MoonPay charge a delivery of `amount` (milli) on `date` came from. */
@@ -282,29 +272,14 @@ function exodusSync_(apply) {
     // Card lines booked before their merchant was known.
     const fixes = [];
     txns.forEach((t) => {
-      if (t.approved || !C.cardPlaceholders.has(t.payee_name) || /Exodus Pay fee/.test(t.memo || '')) return;
+      if (t.approved || !C.cardPlaceholders.has(t.payee_name)) return;
       const sig = Object.keys(cards).find((s) => (t.memo || '').indexOf(s.slice(0, C.sigPrefix)) >= 0);
       if (!sig || !cards[sig].merchant) return;
       fixes.push({ id: t.id, payee_name: exodusMerchantPayee_(cards[sig].merchant),
         memo: cut_(C.memoKey(sig) + ' - Exodus Pay card $' + cards[sig].amount + ' ' + cards[sig].merchant, 200) });
     });
 
-    // Card lines booked at the on-chain total before the export arrived: merchant amount + fee line.
-    const splits = [];
-    txns.forEach((t) => {
-      // Leave alone anything you already reviewed or split by hand.
-      if (t.amount >= 0 || t.approved || (t.subtransactions || []).length || /Exodus Pay fee/.test(t.memo || '')) return;
-      const sig = Object.keys(cards).find((s) => (t.memo || '').indexOf(s.slice(0, C.sigPrefix)) >= 0);
-      if (!sig) return;
-      const merch = -cents_(milli_(cards[sig].amount));
-      const fee = t.amount - merch;
-      if (!merch || !fee || Math.abs(fee) > -merch * 0.02) return;
-      if (txns.some((u) => /Exodus Pay fee/.test(u.memo || '') && (u.memo || '').indexOf(sig.slice(0, C.sigPrefix)) >= 0)) return;
-      splits.push({ t: t, merch: merch, fee: fee, key: C.memoKey(sig) });
-    });
-    splits.forEach((x) => out.push('  split card ' + x.t.date + ' ' + fmtMilli_(x.t.amount) + ' -> ' + fmtMilli_(x.merch) + ' + fee ' + fmtMilli_(x.fee)));
-
-    const net = create.reduce((s, l) => s + l.amount + (l.fee || 0), 0) +
+    const net = create.reduce((s, l) => s + l.amount, 0) +
       conversions.reduce((s, c) => s + (c.replaces ? 0 : c.line.amount), 0);
     out.push(w.account + ': ' + create.length + ' to create, ' + conversions.length + ' MoonPay charges to turn into transfers, ' +
       fixes.length + ' card payees to fill in');
@@ -336,16 +311,11 @@ function exodusSync_(apply) {
           memo: l.memo, cleared: 'cleared', approved: false };
         if (l.category) t.category_id = l.category;
         posts.push(t);
-        if (l.fee) posts.push(exodusCardFeeTxn_(acct.id, l.date, l.fee, l.key));
       });
       const res = y.postTransactions(posts);
       n.created += res.transaction_ids.length;
     }
     if (fixes.length) { y.patchTransactions(fixes); n.renamed += fixes.length; }
-    splits.forEach((x) => {
-      y.postTransactions([exodusCardFeeTxn_(acct.id, x.t.date, x.fee, x.key)]);
-      y.patchTransactions([{ id: x.t.id, amount: x.merch }]);
-    });
   });
   if (apply) out.push('Created ' + n.created + ', MoonPay transfers ' + n.converted + ', renamed ' + n.renamed);
   console.log(out.join('\n'));
