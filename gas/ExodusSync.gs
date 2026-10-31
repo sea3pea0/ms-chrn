@@ -34,6 +34,10 @@ const EXODUS_SYNC = {
   cardPlaceholder: 'Exodus Pay Card',
   categories: { moonpay: 'Transfer: MoonPay', usdc: 'Transfer: USDC' },
   memoKey: (sig) => 'XO ' + sig.slice(0, 24),
+  // A line is already booked if any memo holds this much of its signature (also catches lines
+  // written by other tools, e.g. the first run from pea-docker on 2026-10-31).
+  sigPrefix: 12,
+  cardPlaceholders: new Set(['Exodus Pay Card', 'Exodus Pay']),
   // Earlier hand-entered lines: same amount (1 cent) within this many days.
   matchDays: 3
 };
@@ -49,7 +53,7 @@ function exodusSyncApply() {
 // ---------------------------------------------------------------- chain
 
 /** {sig: {iso, time, amount (milli), dir, counterparty, card, usdcTo}} for one wallet, new sigs only. */
-function exodusChainMoves_(wallet, knownKeys, props) {
+function exodusChainMoves_(wallet, isKnown, props) {
   const C = EXODUS_SYNC;
   const ignoredKey = 'EXOD_IGNORED_' + wallet;
   const ignored = new Set(JSON.parse(props.getProperty(ignoredKey) || '[]'));
@@ -73,7 +77,7 @@ function exodusChainMoves_(wallet, knownKeys, props) {
 
   const moves = [];
   sigs.forEach((bt, sig) => {
-    if (knownKeys.has(C.memoKey(sig)) || ignored.has(sig)) return;
+    if (isKnown(sig) || ignored.has(sig)) return;
     const t = solRpc_('getTransaction', [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }]);
     if (!t || !t.meta) return; // not finalized yet; next run
     const delta = {}; // owner -> mint -> change
@@ -163,6 +167,12 @@ function exodusLine_(m, cards, catIds) {
   return l;
 }
 
+/** True if the memo carries what looks like a signature reference (synced, not hand-entered). */
+function exodusHasSigRef_(memo) {
+  return (String(memo || '').match(/[1-9A-HJ-NP-Za-km-z]{8,}/g) || [])
+    .some((w) => /\d/.test(w) && /[A-Z]/.test(w) && /[a-z]/.test(w));
+}
+
 function exodusSync_(apply) {
   const C = EXODUS_SYNC;
   const y = csvSyncYnab_();
@@ -181,15 +191,15 @@ function exodusSync_(apply) {
     if (!acct) { out.push(w.account + ': YNAB account not found'); return; }
     const txns = y.get('/accounts/' + acct.id + '/transactions?since_date=' +
       isoAddDays_(C.syncStart, -C.matchDays)).transactions.filter((t) => !t.deleted);
-    const known = new Set();
-    txns.forEach((t) => { const m = /XO \S{24}/.exec(t.memo || ''); if (m) known.add(m[0]); });
+    const memos = txns.map((t) => t.memo || '').join('\n');
+    const isKnown = (sig) => memos.indexOf(sig.slice(0, C.sigPrefix)) >= 0;
 
-    const lines = exodusChainMoves_(w.wallet, known, props).map((m) => exodusLine_(m, cards, catIds))
+    const lines = exodusChainMoves_(w.wallet, isKnown, props).map((m) => exodusLine_(m, cards, catIds))
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     // Hand-entered lines without a memo key: same amount within matchDays.
     const used = new Set();
     const create = lines.filter((l) => {
-      const t = txns.find((t) => !used.has(t.id) && !/XO \S{24}/.test(t.memo || '') &&
+      const t = txns.find((t) => !used.has(t.id) && !exodusHasSigRef_(t.memo) &&
         Math.abs(t.amount - l.amount) <= 10 && Math.abs(isoDays_(t.date) - isoDays_(l.date)) <= C.matchDays);
       if (t) { used.add(t.id); out.push('  matched by hand entry ' + t.date + ' ' + fmtMilli_(t.amount)); return false; }
       return true;
@@ -198,8 +208,8 @@ function exodusSync_(apply) {
     // Card lines booked before their merchant was known.
     const fixes = [];
     txns.forEach((t) => {
-      if (t.approved || t.payee_name !== C.cardPlaceholder) return;
-      const sig = Object.keys(cards).find((s) => (t.memo || '').indexOf(C.memoKey(s)) >= 0);
+      if (t.approved || !C.cardPlaceholders.has(t.payee_name)) return;
+      const sig = Object.keys(cards).find((s) => (t.memo || '').indexOf(s.slice(0, C.sigPrefix)) >= 0);
       if (!sig || !cards[sig].merchant) return;
       fixes.push({ id: t.id, payee_name: exodusMerchantPayee_(cards[sig].merchant),
         memo: cut_(C.memoKey(sig) + ' - Exodus Pay card $' + cards[sig].amount + ' ' + cards[sig].merchant, 200) });
