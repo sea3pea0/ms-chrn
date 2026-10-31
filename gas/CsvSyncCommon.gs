@@ -190,6 +190,10 @@ function csvSyncYnab_() {
       });
       return { transaction_ids: created, duplicate_import_ids: dupes };
     },
+    deleteTransaction: function (id) {
+      const r = call('delete', '/transactions/' + id);
+      if (r.code >= 300) throw new Error('YNAB delete failed ' + r.code + ': ' + r.text);
+    },
     patchTransactions: function (txns) {
       txns.forEach((t) => {
         const id = t.id;

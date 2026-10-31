@@ -120,7 +120,7 @@ const XFER_CFG = {
       rh_crypto_end: '2025-06-10'
     },
     transfer_rules: {
-      crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin|sling|morse',
+      crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|exod|phantom|meld|kraken|gemini|bitcoin|sling|morse',
       bill_pay_regex: 'citibank|\\bciti\\b|synchrony|syncb|credit card|card payment|cc payment|geico|americanexp|amex|barclaycard|discovercar|bankamerica',
       ms_regex: 'lemfi|wise|revolut|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom|astra|honey ?fund|apple wallet|apple cash',
       paypal_account_regex: '^PP',
@@ -160,6 +160,8 @@ const XFER_CFG = {
       Barclaycard: 'barclaycard',
       Discover: 'discovercar|discover card',
       Fluz: '^FLUZ\\b|transfer : FLUZ\\b',
+      // MoonPay buys deliver to the Exodus wallets; the card charge is a transfer to EXOD.
+      MoonPay: 'moonpay|^EXOD\\b|transfer : EXOD\\b',
       PayPal: '^PP\\b|transfer : PP\\b|paypal'
     }
   },
@@ -1163,7 +1165,7 @@ function buildTransferLedgerRows_(input) {
     .map((d) => Object.assign({ day: isoDays_(d.date), used: false }, d));
   if (deps.length) {
     out.forEach((r) => {
-      if (r[7] !== 'MS_CRYPTO' || !/moonpay/i.test([r[3], r[4], r[13]].join(' ')) || !(r[6] > 0)) return;
+      if (r[7] !== 'MS_CRYPTO' || !/moonpay|\bEXOD\b/i.test([r[3], r[4], r[13]].join(' ')) || !(r[6] > 0)) return;
       // Closer of the YNAB date (a local-midnight Date from isoToDate_) and the bank (CSV) date.
       const ymd = (dt) => dt.getFullYear() + '-' + ('0' + (dt.getMonth() + 1)).slice(-2) + '-' + ('0' + dt.getDate()).slice(-2);
       const days = [isoDays_(ymd(r[0]))];
