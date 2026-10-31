@@ -311,12 +311,6 @@ function exodusSync_(apply) {
           memo: l.memo, cleared: 'cleared', approved: false };
         if (l.category) t.category_id = l.category;
         posts.push(t);
-          posts.push({ account_id: acct.id, date: l.date, amount: l.amount - usdc, payee_name: 'Swap Fee',
-            memo: cut_('xoUSD -> USDC swap loss (fees + spread); ' + C.splitSends[sp].note + ' | ' + l.key, 200),
-            cleared: 'cleared', approved: false });
-          return;
-        }
-        posts.push(t);
       });
       const res = y.postTransactions(posts);
       n.created += res.transaction_ids.length;
