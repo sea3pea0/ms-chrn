@@ -562,7 +562,7 @@ function buildTransferLedgerRows_(input) {
   const reviewMin = Number(cfg.taekus.review_min_amount) || 0;
   const rx = (k) => new RegExp(cfg.transfer_rules[k], 'i');
   // Wallet on-ramps (Exodus, TUYO) are always crypto, even when the Config sheet keeps an older regex.
-  const cryptoRx = new RegExp(cfg.transfer_rules.crypto_regex + '|\\bexod\\b|\\btuyo\\b|moonpay', 'i');
+  const cryptoRx = new RegExp(cfg.transfer_rules.crypto_regex + '|\\bexod|\\btuyo\\b|moonpay', 'i');
   const billRx = rx('bill_pay_regex');
   const msRx = rx('ms_regex');
   const paypalRx = rx('paypal_account_regex');
