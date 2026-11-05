@@ -120,7 +120,7 @@ const XFER_CFG = {
       rh_crypto_end: '2025-06-10'
     },
     transfer_rules: {
-      crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|phantom|meld|kraken|gemini|bitcoin|sling|morse',
+      crypto_regex: 'coinbase|uphold|topper|usdc|pyusd|crypto|robinhood|transak|moonpay|exod|tuyo|phantom|meld|kraken|gemini|bitcoin|sling|morse',
       bill_pay_regex: 'citibank|\\bciti\\b|synchrony|syncb|credit card|card payment|cc payment|geico|americanexp|amex|barclaycard|discovercar|bankamerica',
       ms_regex: 'lemfi|wise|revolut|western union|skrill|onepay|metapay|moneylion|roarmoney|chime|current account|remitly|xoom|astra|honey ?fund|apple wallet|apple cash',
       paypal_account_regex: '^PP',
@@ -160,6 +160,8 @@ const XFER_CFG = {
       Barclaycard: 'barclaycard',
       Discover: 'discovercar|discover card',
       Fluz: '^FLUZ\\b|transfer : FLUZ\\b',
+      // MoonPay buys deliver to the Exodus wallets; the card charge is a transfer to EXOD.
+      MoonPay: 'moonpay|^EXOD\\b|transfer : EXOD\\b',
       PayPal: '^PP\\b|transfer : PP\\b|paypal'
     }
   },
@@ -171,6 +173,11 @@ const XFER_CFG = {
     { key: 'PRIMIS', accountRegex: '^PRMS\\b', rewardRegex: '^cashback rewards', lagMonths: 1 },
     // MetaMask Card: rewards are paid on-chain in mUSD (MetaMask_Rewards sheet), not seen by YNAB.
     { key: 'METAMASK', accountRegex: '^MMCA\\b', external: 'metaMaskRewards', lagMonths: 0 }
+  ],
+  // Swap losses after money left a tracked account (traced on-chain); shown on the sheet only.
+  swapFees: [
+    { date: '2026-10-29', account: 'EXOD - 6249 - P1', fee: 4.64,
+      note: '2,977.74 xoUSD sent to own wallet AoXX..., swapped on Jupiter to 2,973.10 USDC (tx 2XSon3xT)' }
   ],
   triggerFn: 'syncYnabMirrorScheduled',
   triggerMinute: 32
@@ -554,7 +561,8 @@ function buildTransferLedgerRows_(input) {
   const late = Number(cfg.taekus.late_entry_days) || 30;
   const reviewMin = Number(cfg.taekus.review_min_amount) || 0;
   const rx = (k) => new RegExp(cfg.transfer_rules[k], 'i');
-  const cryptoRx = rx('crypto_regex');
+  // Wallet on-ramps (Exodus, TUYO) are always crypto, even when the Config sheet keeps an older regex.
+  const cryptoRx = new RegExp(cfg.transfer_rules.crypto_regex + '|\\bexod|\\btuyo\\b|moonpay', 'i');
   const billRx = rx('bill_pay_regex');
   const msRx = rx('ms_regex');
   const paypalRx = rx('paypal_account_regex');
@@ -1094,6 +1102,16 @@ function buildTransferLedgerRows_(input) {
       -usd, String(r.id || ''), '', r.type === 'subscription' ? 'paid in ' + (r.currency || 'USDC') : 'rebate');
   });
 
+  // Swap fees incurred after money left a tracked account (e.g. xoUSD swapped to USDC in an outside
+  // wallet): a cost on the sheet only, not in YNAB. Rows from XFER_CFG.swapFees (amount 0, profit = -fee).
+  XFER_CFG.swapFees.forEach((f) => {
+    out.push([
+      isoToDate_(f.date), 'SWAP', f.account, 'Swap fee', 'Swap fee', '', 0, 'MS_CRYPTO', 0, '',
+      -f.fee, 0, 'swap fee', '', '', '', f.note, 'swap loss (fees + spread)', f.date.slice(0, 7),
+      targetGroup_([f.account], aliases) || 'Swap fee', f.fee, 0
+    ]);
+  });
+
   // Deposit-allocated sources (Upgrade, Primis): monthly reward / that month's tracked transfers.
   if (depSrc.length) {
     const monNames = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8,
@@ -1163,7 +1181,7 @@ function buildTransferLedgerRows_(input) {
     .map((d) => Object.assign({ day: isoDays_(d.date), used: false }, d));
   if (deps.length) {
     out.forEach((r) => {
-      if (r[7] !== 'MS_CRYPTO' || !/moonpay/i.test([r[3], r[4], r[13]].join(' ')) || !(r[6] > 0)) return;
+      if (r[7] !== 'MS_CRYPTO' || !/moonpay|\bEXOD\b/i.test([r[3], r[4], r[13]].join(' ')) || !(r[6] > 0)) return;
       // Closer of the YNAB date (a local-midnight Date from isoToDate_) and the bank (CSV) date.
       const ymd = (dt) => dt.getFullYear() + '-' + ('0' + (dt.getMonth() + 1)).slice(-2) + '-' + ('0' + dt.getDate()).slice(-2);
       const days = [isoDays_(ymd(r[0]))];

@@ -49,6 +49,8 @@ function syncYnabMirrorScheduled() {
   logSync_(started, 'running', '');
   syncLogLive_ = started;
   try {
+    // Picks up triggers added in code (e.g. a new sync) without a manual run from the editor.
+    try { const made = ensureAllTriggers(); if (made.length) syncNotes_.push('New triggers: ' + made.join(', ')); } catch (e) { syncNotes_.push('Triggers: ' + e.message); }
     syncYnabMirror_({ force: false, calledBy: 'trigger' });
     updateSyncLog_('ok');
   } catch (e) {

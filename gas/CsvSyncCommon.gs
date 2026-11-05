@@ -4,13 +4,15 @@
  * YNAB_BUDGET_ID (shared with Code.gs).
  *
  * Triggers: run installCsvSyncTriggers() once (Fluz hourly ~:17, Blue Penguin
- * hourly ~:47). removeCsvSyncTriggers() takes them out again.
+ * hourly ~:47, Exodus on-chain sync hourly ~:57, TUYO ~:52). removeCsvSyncTriggers() takes them out again.
  */
 
 const CSV_SYNC_YNAB_BASE = 'https://api.ynab.com/v1';
 const CSV_SYNC_TRIGGERS = [
   { fn: 'fluzSyncApply', minute: 17 },
-  { fn: 'blupeSyncApply', minute: 47 }
+  { fn: 'blupeSyncApply', minute: 47 },
+  { fn: 'exodusSyncApply', minute: 57 },
+  { fn: 'tuyoSyncApply', minute: 52 }
 ];
 
 function installCsvSyncTriggers() {
@@ -188,6 +190,10 @@ function csvSyncYnab_() {
         created.push(JSON.parse(r.text).data.transaction.id);
       });
       return { transaction_ids: created, duplicate_import_ids: dupes };
+    },
+    deleteTransaction: function (id) {
+      const r = call('delete', '/transactions/' + id);
+      if (r.code >= 300) throw new Error('YNAB delete failed ' + r.code + ': ' + r.text);
     },
     patchTransactions: function (txns) {
       txns.forEach((t) => {
