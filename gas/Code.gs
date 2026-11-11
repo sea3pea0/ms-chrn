@@ -112,6 +112,10 @@ function syncYnabMirror_(opts) {
     }
 
     syncStep_('ynab', () => pullYnabMirror_(opts));
+    // P3 (CaaS partner, own YNAB budget): mirror + Taekus CSVs; the ledger step builds P3_Ledger.
+    syncStep_('p3', () => {
+      try { pullP3Mirror_(); } catch (e) { syncNotes_.push('P3 YNAB: ' + e.message); }
+    });
     syncStep_('transfers', () => {
       try { const r = fixTkbMoliTransfers_(); r.notes.forEach((n) => syncNotes_.push(n)); } catch (e) { syncNotes_.push('Transfer fixer: ' + e.message); }
     });
@@ -121,6 +125,9 @@ function syncYnabMirror_(opts) {
     const docProps = PropertiesService.getDocumentProperties();
     const reorder = docProps.getProperty('RAW_ORDER') !== 'newest_first';
     syncStep_('taekus', () => importTaekusCsvs(reorder));
+    syncStep_('p3taekus', () => {
+      try { importP3TaekusCsvs(); } catch (e) { syncNotes_.push('P3 Taekus: ' + e.message); }
+    });
     syncStep_('fluz', () => importFluzCsvs(reorder));
     syncStep_('blupe', () => importBlupeCsvs(reorder));
     if (reorder) docProps.setProperty('RAW_ORDER', 'newest_first');
@@ -134,6 +141,9 @@ function syncYnabMirror_(opts) {
       try { const n = refreshSolanaDeposits(); if (n) syncNotes_.push('Solana +' + n); } catch (e) { syncNotes_.push('Solana: ' + e.message); }
     });
     syncStep_('ledger', () => rebuildTransferLedger());
+    syncStep_('p3ledger', () => {
+      try { rebuildP3Ledger(); } catch (e) { syncNotes_.push('P3 ledger: ' + e.message); }
+    });
     syncStep_('targets', () => {
       if (SpreadsheetApp.getActive().getSheetByName(TARGET_CFG.dashSheet) &&
         PropertiesService.getDocumentProperties().getProperty('TARGETS_DASH_VERSION') === TARGET_CFG.version) rebuildTargetStats();
@@ -141,6 +151,9 @@ function syncYnabMirror_(opts) {
     });
     syncStep_('views', () => { applyViewFormulas_(); applySummaryFormulas_(); });
     syncStep_('bonus', () => rebuildBonusSheet());
+    syncStep_('caas', () => {
+      try { rebuildP3Sheets(); } catch (e) { syncNotes_.push('P3 sheets: ' + e.message); }
+    });
   } finally {
     lock.releaseLock();
   }
@@ -245,8 +258,8 @@ function ynabGetWithBackoff_(url, token) {
   throw new Error('YNAB API request failed after retries.');
 }
 
-function upsertMirrorTransactions_(transactions, accountMap, replaceAll, catGroups) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheets.ynabMirror);
+function upsertMirrorTransactions_(transactions, accountMap, replaceAll, catGroups, sheet) {
+  const sh = sheet || SpreadsheetApp.getActive().getSheetByName(CFG.sheets.ynabMirror);
 
   if (replaceAll) {
     const rows = transactions
@@ -374,12 +387,12 @@ function mapTxnToMirrorRow_(t, accountMap, catGroups) {
   ];
 }
 
-function writeAccounts_(accountMap) {
+function writeAccounts_(accountMap, sheet) {
   const rows = Object.values(accountMap)
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
     .map((a) => [a.id, a.name, a.type, a.on_budget, a.closed, a.note, a.balance]);
 
-  const sh = SpreadsheetApp.getActive().getSheetByName(CFG.sheets.ynabAccounts);
+  const sh = sheet || SpreadsheetApp.getActive().getSheetByName(CFG.sheets.ynabAccounts);
   sh.getRange(1, 1, 1, CFG.accountHeaders.length).setValues([CFG.accountHeaders]);
   resetDataBody_(sh, CFG.accountHeaders.length);
   if (rows.length) {

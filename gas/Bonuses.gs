@@ -14,8 +14,13 @@ const BONUS_CFG = {
 
 function rebuildBonusSheet() {
   const ss = SpreadsheetApp.getActive();
-  const rows = buildBonusRows_(combinedMirror_(), ss.getSpreadsheetTimeZone());
-  const sh = ensureSheet_(ss, BONUS_CFG.sheet);
+  return writeBonusSheet_(BONUS_CFG.sheet, buildBonusRows_(combinedMirror_(), ss.getSpreadsheetTimeZone()));
+}
+
+/** Totals by type, by year, and every row (buildBonusRows_ output) on one sheet. */
+function writeBonusSheet_(sheetName, rows) {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ensureSheet_(ss, sheetName);
   sh.clear();
   const labels = BONUS_CFG.types.map((t) => t.label);
 
@@ -54,7 +59,7 @@ function rebuildBonusSheet() {
     sh.getRange(start + 1, 5, list.length - 1, 1).setNumberFormat('$#,##0.00');
   }
   sh.setFrozenRows(0);
-  console.log('Bank Bonus & Referrals: ' + rows.length + ' rows');
+  console.log(sheetName + ': ' + rows.length + ' rows');
   return rows.length;
 }
 
