@@ -105,6 +105,13 @@ const XFER_CFG = {
     fluz: {
       account_name: 'FLUZ'
     },
+    // P3: Churning as a Service partner with their own YNAB budget (same YNAB token). Everything in
+    // it (transfer profit, fees, bank bonuses, referrals) is split; share = Chris's part.
+    p3: {
+      budget_id: '46badaf5-8a46-4b54-a73c-614ed651eaea',
+      share: '0.5',
+      taekus_folder: 'P3 Taekus Transaction CSVs'
+    },
     blupe: {
       account_name: 'BLUPE',
       interchange_share: '0.697',
@@ -197,10 +204,12 @@ function setupTransferProfit() {
   refreshCoinbaseFees(true);
   refreshMetaMaskRewards(true);
   rebuildTransferLedger();
+  try { pullP3Mirror_(); importP3TaekusCsvs(true); rebuildP3Ledger(); } catch (e) { console.warn('P3: ' + e); }
   applyViewFormulas_();
   applySummaryFormulas_();
   setupTargetDashboard();
   rebuildBonusSheet();
+  try { rebuildP3Sheets(); } catch (e) { console.warn('P3 sheets: ' + e); }
   arrangeSheets_();
 }
 
@@ -209,9 +218,11 @@ function arrangeSheets_() {
   const ss = SpreadsheetApp.getActive();
   const order = [
     CFG.sheets.summary, CFG.sheets.ms, CFG.sheets.msCrypto, CFG.sheets.billPay, TARGET_CFG.dashSheet, BONUS_CFG.sheet,
-    XFER_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TD_CFG.sheet, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, INGEST.taekus.balanceSheet, XFER_CFG.sheets.fluzRaw,
+    P3_CFG.sheets.caas, P3_CFG.sheets.ms, P3_CFG.sheets.msCrypto, P3_CFG.sheets.billPay, P3_CFG.sheets.bonus,
+    XFER_CFG.sheets.ledger, P3_CFG.sheets.ledger, XFER_CFG.sheets.overrides, TD_CFG.sheet, TARGET_CFG.statsSheet, XFER_CFG.sheets.taekusRaw, INGEST.taekus.balanceSheet, XFER_CFG.sheets.fluzRaw,
     XFER_CFG.sheets.blupeRaw, XFER_CFG.sheets.blupeStatements, CB_CFG.sheet, CB_CFG.balanceSheet, MM_CFG.sheet, SOL_CFG.sheet,
-    CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, CFG.sheets.config
+    P3_CFG.sheets.taekusRaw, CFG.sheets.ynabMirror, YH_CFG.sheet, CFG.sheets.ynabAccounts, P3_CFG.sheets.mirror,
+    P3_CFG.sheets.accounts, CFG.sheets.config
   ];
   let pos = 1;
   order.forEach((name) => {
@@ -318,9 +329,14 @@ const csvFolderStamps_ = {};
 
 function importTaekusCsvs(force) {
   ensureTransferSheets_();
-  if (csvFolderUnchanged_(XFER_CFG.taekusFolder, XFER_CFG.sheets.taekusRaw, force)) return 0;
-  const rows = taekusRowsFromCsvs_(driveCsvs_(XFER_CFG.taekusFolder));
-  const sh = SpreadsheetApp.getActive().getSheetByName(XFER_CFG.sheets.taekusRaw);
+  return importTaekusFolder_(XFER_CFG.taekusFolder, XFER_CFG.sheets.taekusRaw, force);
+}
+
+/** One Drive folder of ALT debit exports -> a Taekus raw sheet (newest first). */
+function importTaekusFolder_(folderName, sheetName, force) {
+  if (csvFolderUnchanged_(folderName, sheetName, force)) return 0;
+  const rows = taekusRowsFromCsvs_(driveCsvs_(folderName));
+  const sh = ensureSheet_(SpreadsheetApp.getActive(), sheetName);
   sh.clearContents();
   sh.getRange(1, 1, 1, XFER_CFG.taekusRawHeaders.length).setValues([XFER_CFG.taekusRawHeaders]);
   sh.setFrozenRows(1);
@@ -329,8 +345,8 @@ function importTaekusCsvs(force) {
     rng.setNumberFormat('@');
     rng.setValues(rows.slice().reverse()); // newest on top
   }
-  markCsvFolderImported_(XFER_CFG.sheets.taekusRaw);
-  console.log('Taekus_Raw: ' + rows.length + ' rows');
+  markCsvFolderImported_(sheetName);
+  console.log(sheetName + ': ' + rows.length + ' rows');
   return rows.length;
 }
 
@@ -1104,7 +1120,7 @@ function buildTransferLedgerRows_(input) {
 
   // Swap fees incurred after money left a tracked account (e.g. xoUSD swapped to USDC in an outside
   // wallet): a cost on the sheet only, not in YNAB. Rows from XFER_CFG.swapFees (amount 0, profit = -fee).
-  XFER_CFG.swapFees.forEach((f) => {
+  (input.swapFees || XFER_CFG.swapFees).forEach((f) => {
     out.push([
       isoToDate_(f.date), 'SWAP', f.account, 'Swap fee', 'Swap fee', '', 0, 'MS_CRYPTO', 0, '',
       -f.fee, 0, 'swap fee', '', '', '', f.note, 'swap loss (fees + spread)', f.date.slice(0, 7),
@@ -1247,9 +1263,9 @@ function isoToDate_(iso) {
 // ---------------------------------------------------------------- views
 
 /** MS / MS-Crypto / Bill Pay: totals on top, monthly table, then the transactions. */
-function setTransferView_(sheetName, bucket) {
+function setTransferView_(sheetName, bucket, ledgerName) {
   const sheet = ensureSheet_(SpreadsheetApp.getActive(), sheetName);
-  const L = XFER_CFG.sheets.ledger;
+  const L = ledgerName || XFER_CFG.sheets.ledger;
   sheet.clear();
   sheet.getRange('A1:H1').setValues([['Transfers', 'Amount', 'Taekus points', 'Fluz cashback', 'Fees',
     'Profit (net)', 'Avg rate', 'Last 30 days profit']]);

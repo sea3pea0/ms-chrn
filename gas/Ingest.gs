@@ -54,7 +54,19 @@ function ingestTaekus_(body) {
   const cfg = INGEST.taekus;
   const folders = DriveApp.getFoldersByName(XFER_CFG.taekusFolder);
   if (!folders.hasNext()) throw new Error('Drive folder not found: ' + XFER_CFG.taekusFolder);
-  const folder = folders.next();
+  const mainFolder = folders.next();
+  // P3 (CaaS) accounts go to P3's own folder so they never mix with P1 / P2. A login is P3's when
+  // one of its accounts is a Taekus account in P3's budget (and none is in the main budget); its
+  // other accounts, e.g. a new one not in YNAB yet, then go to P3 too.
+  const owners = taekusOwners_();
+  const l4s = (body.accounts || []).map((a) => String(a.last4 || '').replace(/\D/g, ''));
+  const loginIsP3 = l4s.some((l) => owners.p3[l]) && !l4s.some((l) => owners.main[l]);
+  let p3Folder = null;
+  const folderFor = (last4) => {
+    if (!(owners.p3[last4] || (loginIsP3 && !owners.main[last4]))) return mainFolder;
+    if (!p3Folder) p3Folder = p3TaekusFolder_(mainFolder);
+    return p3Folder;
+  };
   const H = cfg.headers;
   const col = {};
   H.forEach((h, i) => { col[h] = i; });
@@ -65,6 +77,8 @@ function ingestTaekus_(body) {
     const last4 = String(a.last4 || '').replace(/\D/g, '');
     if (!/^\d{4}$/.test(last4)) return;
     const name = cfg.filePrefix + last4 + '.csv';
+    const folder = folderFor(last4);
+    const person = folder === mainFolder ? '' : P3_CFG.person;
     const it = folder.getFilesByName(name);
     const file = it.hasNext() ? it.next() : null;
     const byToken = {};
@@ -112,19 +126,32 @@ function ingestTaekus_(body) {
     }).join(',')).join('\n') + '\n';
     if (!file) folder.createFile(name, csv, MimeType.CSV);
     else if (file.getBlob().getDataAsString() !== csv) file.setContent(csv);
-    result.accounts.push({ last4: last4, rows: rows.length, received: Object.keys(fresh).length, dropped: dropped });
+    const known = !!(owners.main[last4] || owners.p3[last4]);
+    result.accounts.push({ last4: last4, rows: rows.length, received: Object.keys(fresh).length, dropped: dropped,
+      person: person || 'main', in_ynab: known });
     if (a.available_balance !== undefined && a.available_balance !== null) {
-      balances.push([last4, a.name || '', Number(a.available_balance), new Date()]);
+      balances.push([last4, a.name || '', Number(a.available_balance), new Date(), person,
+        known ? '' : 'not in YNAB yet']);
     }
   });
 
   if (balances.length) {
+    // Each login (P1/P2, P3) posts only its own accounts: update those rows, keep the others.
     const sh = ensureSheet_(SpreadsheetApp.getActive(), cfg.balanceSheet);
+    const head = ['account_last4', 'name', 'available_balance', 'as_of', 'person', 'note'];
+    const old = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, head.length).getValues() : [];
+    const byL4 = {};
+    old.forEach((r) => {
+      const l4 = String(r[0]).padStart(4, '0');
+      if (/^\d{4}$/.test(l4)) byL4[l4] = r.slice(0, head.length);
+    });
+    balances.forEach((r) => { byL4[r[0]] = r; });
+    const rows = Object.keys(byL4).sort().map((k) => byL4[k]);
     sh.clearContents();
-    sh.getRange(1, 1, 1, 4).setValues([['account_last4', 'name', 'available_balance', 'as_of']]);
-    sh.getRange(2, 1, balances.length, 1).setNumberFormat('@'); // keep the leading zero (0523)
-    sh.getRange(2, 1, balances.length, 4).setValues(balances);
-    sh.getRange(2, 3, balances.length, 1).setNumberFormat('$#,##0.00');
+    sh.getRange(1, 1, 1, head.length).setValues([head]);
+    sh.getRange(2, 1, rows.length, 1).setNumberFormat('@'); // keep the leading zero (0523)
+    sh.getRange(2, 1, rows.length, head.length).setValues(rows);
+    sh.getRange(2, 3, rows.length, 1).setNumberFormat('$#,##0.00');
   }
   return result;
 }
@@ -133,4 +160,31 @@ function ingestTaekus_(body) {
 function altSortKey_(s) {
   const m = String(s).match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2})?/);
   return m ? m[3] + '-' + m[1] + '-' + m[2] + ' ' + (m[4] || '') : '';
+}
+
+/** Taekus last 4s by budget: { main: {last4: true}, p3: {last4: true} } from the YNAB account sheets. */
+function taekusOwners_() {
+  const ss = SpreadsheetApp.getActive();
+  const read = (name) => {
+    const out = {};
+    const sh = ss.getSheetByName(name);
+    if (!sh || sh.getLastRow() < 2) return out;
+    const v = sh.getDataRange().getValues();
+    const h = mapHeaderIndexes_(v[0]);
+    v.slice(1).forEach((r) => {
+      const m = String(r[h.account_name] || '').match(/^TK[A-Z]?\s*-\s*(\d{4})\b/i);
+      if (m) out[m[1]] = true;
+    });
+    return out;
+  };
+  return { main: read(CFG.sheets.ynabAccounts), p3: read(P3_CFG.sheets.accounts) };
+}
+
+/** P3's Taekus folder (Config p3/taekus_folder), created next to the main Taekus folder if missing. */
+function p3TaekusFolder_(mainFolder) {
+  const name = p3Config_().taekusFolder;
+  const it = DriveApp.getFoldersByName(name);
+  if (it.hasNext()) return it.next();
+  const parents = mainFolder.getParents();
+  return parents.hasNext() ? parents.next().createFolder(name) : DriveApp.createFolder(name);
 }

@@ -3,7 +3,7 @@
  *
  *   1. Cash back minus fees by period: month to date, each earlier month of this year, year to
  *      date, last year, all time; split MS / MS-Crypto / Bill Pay, with Coinbase One and Fluz load
- *      fees in their own columns. Per-transfer fees (split fees, on-ramp fees) are already inside
+ *      fees in their own columns, and CaaS (your share of P3's profit, P3.gs) in its own column. Per-transfer fees (split fees, on-ramp fees) are already inside
  *      each bucket's profit.
  *   2. Targets active in the last 30 days, with their cash back minus fees, the current rate (the
  *      newest transfer whose cash back has posted, minus its fees), and an estimate of
@@ -25,7 +25,7 @@ const SUMMARY_CFG = {
 };
 
 /** Pure: ledger values (header row first) + today's ISO date -> everything the sheet shows. */
-function buildSummaryData_(ledger, todayIso, tz) {
+function buildSummaryData_(ledger, todayIso, tz, caas) {
   const h = mapHeaderIndexes_(ledger[0] || []);
   const rows = [];
   ledger.slice(1).forEach((r) => {
@@ -56,7 +56,9 @@ function buildSummaryData_(ledger, todayIso, tz) {
   periods.push({ label: 'All time', test: () => true, strong: true });
   const r2 = (x) => Math.round(x * 100) / 100;
   const periodRows = periods.map((p) => {
-    const v = { MS: 0, MS_CRYPTO: 0, BILL_PAY: 0, cbOne: 0, fluzFees: 0, spend: 0, transfers: 0 };
+    const v = { MS: 0, MS_CRYPTO: 0, BILL_PAY: 0, cbOne: 0, fluzFees: 0, caas: 0, spend: 0, transfers: 0 };
+    // CaaS: your share of P3's profit (P3.gs), one number per item; P3's spend isn't yours.
+    (caas || []).forEach((c) => { if (p.test(c.iso)) v.caas += c.profit; });
     rows.forEach((r) => {
       if (!p.test(r.iso)) return;
       if (SUMMARY_CFG.buckets.indexOf(r.bucket) >= 0) {
@@ -69,9 +71,11 @@ function buildSummaryData_(ledger, todayIso, tz) {
         v.fluzFees += r.profit;
       }
     });
-    const total = v.MS + v.MS_CRYPTO + v.cbOne + v.BILL_PAY + v.fluzFees;
-    return [p.label, r2(v.MS), r2(v.MS_CRYPTO), r2(v.cbOne), r2(v.BILL_PAY), r2(v.fluzFees), r2(total), r2(v.spend),
-      v.spend ? total / v.spend : 0, v.transfers];
+    const own = v.MS + v.MS_CRYPTO + v.cbOne + v.BILL_PAY + v.fluzFees;
+    const total = own + v.caas;
+    // Net rate is on your own spend only, so it leaves CaaS out.
+    return [p.label, r2(v.MS), r2(v.MS_CRYPTO), r2(v.cbOne), r2(v.BILL_PAY), r2(v.fluzFees), r2(v.caas), r2(total),
+      r2(v.spend), v.spend ? own / v.spend : 0, v.transfers];
   });
 
   // Active targets: any tracked transfer in the last 30 days.
@@ -123,6 +127,7 @@ function buildSummaryData_(ledger, todayIso, tz) {
   const bySource = SUMMARY_CFG.sources.map((s) => [s[1], r2(rows
     .filter((r) => r.source === s[0] && SUMMARY_CFG.buckets.indexOf(r.bucket) >= 0)
     .reduce((x, r) => x + r.profit, 0))]);
+  bySource.push(['CaaS (your share of P3)', r2((caas || []).reduce((x, c) => x + c.profit, 0))]);
   const review = rows.filter((r) => r.bucket === 'REVIEW' || /^no csv row/.test(r.match)).length;
   return { periods: periodRows, strong: periods.map((p) => !!p.strong), active: active, bySource: bySource, review: review };
 }
@@ -132,7 +137,7 @@ function writeSummary_() {
   const tz = ss.getSpreadsheetTimeZone();
   const sh = ensureSheet_(ss, CFG.sheets.summary);
   const data = buildSummaryData_(ss.getSheetByName(XFER_CFG.sheets.ledger).getDataRange().getValues(),
-    Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), tz);
+    Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), tz, caasShareRows_());
   const C = SUMMARY_CFG.colors;
   const money = '$#,##0.00;[Red]-$#,##0.00';
   const W = 12;
@@ -144,7 +149,7 @@ function writeSummary_() {
   const title = sh.getRange(1, 1, 1, W).merge();
   title.setValue('MS-CHRN Cash Back').setFontSize(18).setFontWeight('bold').setFontColor(C.text).setBackground(C.title);
   sh.getRange(2, 1, 1, W).merge().setValue('Updated ' + Utilities.formatDate(new Date(), tz, 'MMM d, yyyy h:mm a') +
-    '   ·   cash back minus fees (split fees, on-ramp fees, Coinbase One, Fluz load fees)')
+    '   ·   cash back minus fees (split fees, on-ramp fees, Coinbase One, Fluz load fees), plus your CaaS share of P3')
     .setFontColor('#666666').setFontStyle('italic');
   sh.setRowHeight(1, 40);
 
@@ -164,21 +169,22 @@ function writeSummary_() {
   // 1. Periods
   let row = 4;
   section(row, 'Cash back minus fees');
-  header(row + 1, ['Period', 'MS', 'MS-Crypto', 'Coinbase One', 'Bill Pay', 'Fluz load fees', 'Total', 'Spend',
-    'Net rate', 'Transfers']);
+  header(row + 1, ['Period', 'MS', 'MS-Crypto', 'Coinbase One', 'Bill Pay', 'Fluz load fees', 'CaaS (P3)', 'Total',
+    'Spend', 'Net rate', 'Transfers']);
   const p0 = row + 2;
   const n = data.periods.length;
-  sh.getRange(p0, 1, n, 10).setValues(data.periods);
-  sh.getRange(p0, 2, n, 7).setNumberFormat(money);
-  sh.getRange(p0, 9, n, 1).setNumberFormat('0.00%');
-  sh.getRange(p0, 10, n, 1).setNumberFormat('#,##0');
-  band(p0, n, 10);
-  sh.getRange(p0, 7, n, 1).setFontWeight('bold');
-  sh.getRange(p0, 1, 1, 10).setFontWeight('bold'); // month to date
+  const PW = 11;
+  sh.getRange(p0, 1, n, PW).setValues(data.periods);
+  sh.getRange(p0, 2, n, 8).setNumberFormat(money);
+  sh.getRange(p0, 10, n, 1).setNumberFormat('0.00%');
+  sh.getRange(p0, 11, n, 1).setNumberFormat('#,##0');
+  band(p0, n, PW);
+  sh.getRange(p0, 8, n, 1).setFontWeight('bold');
+  sh.getRange(p0, 1, 1, PW).setFontWeight('bold'); // month to date
   const firstStrong = data.strong.indexOf(true);
-  data.strong.forEach((st, i) => { if (st) sh.getRange(p0 + i, 1, 1, 10).setFontWeight('bold').setBackground(C.header); });
+  data.strong.forEach((st, i) => { if (st) sh.getRange(p0 + i, 1, 1, PW).setFontWeight('bold').setBackground(C.header); });
   if (firstStrong > 0) {
-    sh.getRange(p0 + firstStrong, 1, 1, 10)
+    sh.getRange(p0 + firstStrong, 1, 1, PW)
       .setBorder(true, null, null, null, null, null, '#999999', SpreadsheetApp.BorderStyle.SOLID);
   }
 
